@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_dsp/juce_dsp.h>
 
@@ -37,13 +38,16 @@ public:
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
+    float getInputMeterDb() const noexcept { return inputMeterDb.load(); }
+    float getOutputMeterDb() const noexcept { return outputMeterDb.load(); }
+    float getGainReductionMeterDb() const noexcept { return gainReductionMeterDb.load(); }
+
 private:
     enum class ModuleId
     {
         open,
         space,
-        master,
-        smile
+        master
     };
 
     struct OnePole
@@ -95,6 +99,7 @@ private:
     struct SmoothValue
     {
         void reset (double sampleRate, float seconds);
+        void setCurrentAndTarget (float newValue);
         void setTarget (float newTarget);
         float getNext();
 
@@ -108,12 +113,22 @@ private:
     static bool getBoolParam (juce::AudioProcessorValueTreeState& state, const juce::String& id);
 
     void updateFilters();
-    void processOpen (juce::AudioBuffer<float>& buffer, float smile);
-    void processSpace (juce::AudioBuffer<float>& buffer, float smile);
-    void processMaster (juce::AudioBuffer<float>& buffer, float smile);
-    void processSmile (juce::AudioBuffer<float>& buffer, float smile);
-    void processModule (ModuleId module, juce::AudioBuffer<float>& buffer, float smile);
+    void processOpen (juce::AudioBuffer<float>& buffer);
+    void processSpace (juce::AudioBuffer<float>& buffer);
+    void processMaster (juce::AudioBuffer<float>& buffer);
+    void processSmile (juce::AudioBuffer<float>& buffer);
+    void processModule (ModuleId module, juce::AudioBuffer<float>& buffer);
+    void processRouting (juce::AudioBuffer<float>& buffer, const std::array<ModuleId, 3>& order);
     std::array<ModuleId, 3> getRoutingOrder() const;
+    float measureRms (const juce::AudioBuffer<float>& buffer) const;
+    float measurePerceivedLevel (const juce::AudioBuffer<float>& buffer) const;
+    void updateLevelMeter (const juce::AudioBuffer<float>& buffer, float& smoother, std::atomic<float>& target);
+    void updateGainReductionMeter();
+    void applyModuleLevelMatch (juce::AudioBuffer<float>& buffer, float beforeRms, SmoothValue& smoother,
+                                float minGain = 0.72f, float maxGain = 1.14f);
+    void applyWetLevelMatch (juce::AudioBuffer<float>& buffer);
+    void applyFinalLevelMatch (juce::AudioBuffer<float>& buffer);
+    void applyOutputGain (juce::AudioBuffer<float>& buffer);
 
     static float softSaturate (float x, float drive);
     static float softClip (float x, float threshold, float softness);
@@ -127,13 +142,18 @@ private:
     std::array<OnePole, 2> subHarmonicHighPass;
     std::array<OnePole, 2> bodyBandLowPass;
     std::array<OnePole, 2> bodyBandHighPass;
+    std::array<OnePole, 2> openSideLowPass;
+    std::array<OnePole, 2> openCenterLowPass;
+    std::array<OnePole, 2> openCenterHighPass;
+    std::array<OnePole, 2> openCenterBodyLowPass;
+    std::array<OnePole, 2> openCenterBodyHighPass;
     std::array<OnePole, 2> depthHighPass;
     std::array<OnePole, 2> sideHighPass;
-    std::array<AllPass, 2> wideAllPass;
+    std::array<AllPass, 2> diffusorAllPass;
+    std::array<AllPass, 2> diffusorWarmAllPass;
+    std::array<AllPass, 2> phaserAllPass;
+    std::array<AllPass, 2> phaserWarmAllPass;
     std::array<OnePole, 2> masterDetector;
-    std::array<OnePole, 2> transientSlow;
-    std::array<OnePole, 2> smileLowPass;
-    std::array<OnePole, 2> smileHighPass;
 
     std::array<Biquad, 2> eqLow;
     std::array<Biquad, 2> eqLowMid;
@@ -142,18 +162,35 @@ private:
     std::array<Biquad, 2> eqHigh;
 
     SmoothValue smileSmooth;
+    SmoothValue routingWetSmooth;
+    SmoothValue wetLevelSmooth;
+    SmoothValue openLevelSmooth;
+    SmoothValue spaceLevelSmooth;
+    SmoothValue masterLevelSmooth;
+    SmoothValue finalLevelSmooth;
+    SmoothValue outputGainSmooth;
     SmoothValue depthSmooth;
+    SmoothValue depthDistanceSmooth;
     SmoothValue wideSmooth;
     SmoothValue wideFreqSmooth;
+    SmoothValue wideRateSmooth;
+    SmoothValue diffusorFreqSmooth;
     SmoothValue wideDelaySmooth;
 
     double currentSampleRate = 44100.0;
     int delayWritePosition = 0;
     int wideDelayWritePosition = 0;
+    std::array<ModuleId, 3> lastRoutingOrder { ModuleId::open, ModuleId::space, ModuleId::master };
     std::array<float, 2> compressorEnv {};
-    std::array<float, 2> smileGlueEnv {};
     std::array<float, 2> transientFastEnv {};
     std::array<float, 2> transientSlowEnv {};
+    std::atomic<float> inputMeterDb { -60.0f };
+    std::atomic<float> outputMeterDb { -60.0f };
+    std::atomic<float> gainReductionMeterDb { 0.0f };
+    float inputMeterSmooth = -60.0f;
+    float outputMeterSmooth = -60.0f;
+    float gainReductionMeterSmooth = 0.0f;
+    float blockGainReductionDb = 0.0f;
     float wideModPhase = 0.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SuperBassAudioProcessor)

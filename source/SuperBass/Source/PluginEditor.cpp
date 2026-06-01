@@ -8,10 +8,17 @@ const juce::Colour panelOutline { 78, 73, 65 };
 const juce::Colour gold { 214, 168, 88 };
 const juce::Colour text { 230, 226, 216 };
 const juce::Colour muted { 158, 151, 139 };
+
+void drawSectionTitle (juce::Graphics& g, juce::Rectangle<int> area, const juce::String& name)
+{
+    g.setColour (muted);
+    g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+    g.drawFittedText (name, area.removeFromTop (18), juce::Justification::centred, 1);
+}
 }
 
 SuperBassAudioProcessorEditor::SuperBassAudioProcessorEditor (SuperBassAudioProcessor& p)
-    : AudioProcessorEditor (&p), processor (p), routeStrip (p)
+    : AudioProcessorEditor (&p), processor (p), routeStrip (p), vuMeter (p)
 {
     setSize (1240, 680);
 
@@ -28,15 +35,18 @@ SuperBassAudioProcessorEditor::SuperBassAudioProcessorEditor (SuperBassAudioProc
     setupKnob (body, "Body", "openBody");
     setupKnob (bodyFreq, "Body Hz", "openBodyFreq");
     setupKnob (depth, "Depth", "spaceDepth");
+    setupKnob (depthDistance, "Distance", "spaceDepthDistance");
     setupKnob (wide, "Wide", "spaceWide");
     setupKnob (wideFreq, "Wide Hz", "spaceWideFreq");
+    setupKnob (wideRate, "Rate", "spaceWideRate");
+    setupKnob (diffusorFreq, "Diff Hz", "spaceDiffusorHz");
     setupKnob (clipper, "Clipper", "masterClipper");
     setupKnob (comp, "Comp", "masterCompression");
     setupKnob (compAttack, "C Atk", "masterCompAttack");
     setupKnob (compRelease, "C Rel", "masterCompRelease");
-    setupKnob (transient, "Trans", "masterTransient");
     setupKnob (transientAttack, "T Atk", "masterTransientAttack");
     setupKnob (transientRelease, "T Rel", "masterTransientRelease");
+    setupKnob (transientMix, "Trans Mix", "masterTransientMix");
     setupKnob (eqLow, "60", "eqLow");
     setupKnob (eqLowMid, "160", "eqLowMid");
     setupKnob (eqMid, "500", "eqMid");
@@ -46,17 +56,19 @@ SuperBassAudioProcessorEditor::SuperBassAudioProcessorEditor (SuperBassAudioProc
     setupToggle (openPower, "Open", "openEnabled");
     setupToggle (spacePower, "Space", "spaceEnabled");
     setupToggle (masterPower, "Master", "masterEnabled");
-    setupToggle (autoGain, "Auto Gain", "masterAutoGain");
-
-    setupChoice (depthPosition, "Depth", "spaceDepthPosition");
-    setupChoice (color, "Color", "colorMode");
+    setupToggle (allPassPower, "Diffusor", "spaceAllPassEnabled");
 
     setupModeButton (haasButton, "HASS", 0);
     setupModeButton (flangerButton, "FLANGER", 1);
     setupModeButton (phaserButton, "PHASER", 2);
+    setupMeterButton (meterInButton, "IN", 0);
+    setupMeterButton (meterOutButton, "OUT", 1);
+    setupMeterButton (meterGrButton, "GR", 2);
+    addAndMakeVisible (vuMeter);
     addAndMakeVisible (routeStrip);
     updateWideModeButtons();
-    startTimerHz (12);
+    updateMeterButtons();
+    startTimerHz (48);
 }
 
 void SuperBassAudioProcessorEditor::setupKnob (Knob& knob, const juce::String& labelText, const juce::String& paramId)
@@ -118,6 +130,18 @@ void SuperBassAudioProcessorEditor::setupModeButton (juce::TextButton& button, c
     addAndMakeVisible (button);
 }
 
+void SuperBassAudioProcessorEditor::setupMeterButton (juce::TextButton& button, const juce::String& buttonText, int mode)
+{
+    button.setButtonText (buttonText);
+    button.setClickingTogglesState (false);
+    button.setColour (juce::TextButton::buttonColourId, juce::Colour (29, 29, 30));
+    button.setColour (juce::TextButton::buttonOnColourId, gold);
+    button.setColour (juce::TextButton::textColourOffId, text);
+    button.setColour (juce::TextButton::textColourOnId, background);
+    button.onClick = [this, mode] { setMeterMode (mode); };
+    addAndMakeVisible (button);
+}
+
 void SuperBassAudioProcessorEditor::setWideMode (int mode)
 {
     if (auto* param = processor.apvts.getParameter ("spaceWideMode"))
@@ -142,9 +166,28 @@ void SuperBassAudioProcessorEditor::updateWideModeButtons()
     phaserButton.repaint();
 }
 
+void SuperBassAudioProcessorEditor::setMeterMode (int mode)
+{
+    meterMode = juce::jlimit (0, 2, mode);
+    vuMeter.setMode (meterMode);
+    updateMeterButtons();
+}
+
+void SuperBassAudioProcessorEditor::updateMeterButtons()
+{
+    meterInButton.setToggleState (meterMode == 0, juce::dontSendNotification);
+    meterOutButton.setToggleState (meterMode == 1, juce::dontSendNotification);
+    meterGrButton.setToggleState (meterMode == 2, juce::dontSendNotification);
+    meterInButton.repaint();
+    meterOutButton.repaint();
+    meterGrButton.repaint();
+}
+
 void SuperBassAudioProcessorEditor::timerCallback()
 {
     updateWideModeButtons();
+    updateMeterButtons();
+    vuMeter.repaint();
     routeStrip.repaint();
 }
 
@@ -156,7 +199,7 @@ void SuperBassAudioProcessorEditor::paint (juce::Graphics& g)
     bounds.removeFromTop (54);
     bounds.removeFromTop (74);
 
-    auto smileArea = bounds.removeFromLeft (190);
+    auto smileArea = bounds.removeFromLeft (198);
     g.setColour (juce::Colour (25, 24, 23));
     g.fillRoundedRectangle (smileArea.toFloat(), 8.0f);
     g.setColour (panelOutline);
@@ -175,6 +218,10 @@ void SuperBassAudioProcessorEditor::paint (juce::Graphics& g)
         g.drawRoundedRectangle (area.toFloat(), 8.0f, 1.0f);
     }
 
+    drawSectionTitle (g, smileArea.reduced (12, 10), "GLOBAL");
+    drawSectionTitle (g, open.reduced (12, 10), "OPEN");
+    drawSectionTitle (g, space.reduced (12, 10), "SPACE");
+    drawSectionTitle (g, master.reduced (12, 10), "MASTER");
 }
 
 void SuperBassAudioProcessorEditor::resized()
@@ -183,10 +230,18 @@ void SuperBassAudioProcessorEditor::resized()
     title.setBounds (bounds.removeFromTop (44));
 
     auto content = bounds.removeFromTop (570);
-    auto smileArea = content.removeFromLeft (210).reduced (18);
-    layoutKnob (smile, smileArea.removeFromTop (180));
-    layoutChoice (color, smileArea.removeFromTop (62));
-    layoutKnob (outputGain, smileArea.removeFromTop (150));
+    auto smileArea = content.removeFromLeft (208).reduced (16);
+    smileArea.removeFromTop (22);
+    vuMeter.setBounds (smileArea.removeFromTop (112));
+    auto meterButtons = smileArea.removeFromTop (30).reduced (0, 3);
+    const auto meterButtonWidth = meterButtons.getWidth() / 3;
+    meterInButton.setBounds (meterButtons.removeFromLeft (meterButtonWidth).reduced (2));
+    meterOutButton.setBounds (meterButtons.removeFromLeft (meterButtonWidth).reduced (2));
+    meterGrButton.setBounds (meterButtons.reduced (2));
+    smileArea.removeFromTop (16);
+    layoutKnob (smile, smileArea.removeFromTop (166));
+    smileArea.removeFromTop (6);
+    layoutKnob (outputGain, smileArea.removeFromTop (140));
 
     routeStrip.setBounds (content.removeFromTop (70).reduced (12, 6));
 
@@ -195,44 +250,52 @@ void SuperBassAudioProcessorEditor::resized()
     auto spaceArea = modules.removeFromLeft (modules.getWidth() / 2).reduced (16);
     auto masterArea = modules.reduced (16);
 
+    openArea.removeFromTop (18);
     openPower.button.setBounds (openArea.removeFromTop (28));
-    auto openKnobs = openArea.removeFromTop (180);
+    auto openKnobs = openArea.removeFromTop (174);
     layoutKnob (sub, openKnobs.removeFromLeft (openKnobs.getWidth() / 2).reduced (5));
     layoutKnob (subFreq, openKnobs.reduced (5));
-    auto bodyKnobs = openArea.removeFromTop (180);
+    auto bodyKnobs = openArea.removeFromTop (174);
     layoutKnob (body, bodyKnobs.removeFromLeft (bodyKnobs.getWidth() / 2).reduced (5));
     layoutKnob (bodyFreq, bodyKnobs.reduced (5));
 
+    spaceArea.removeFromTop (18);
     spacePower.button.setBounds (spaceArea.removeFromTop (28));
-    auto spaceKnobs = spaceArea.removeFromTop (170);
+    auto spaceKnobs = spaceArea.removeFromTop (132);
     layoutKnob (depth, spaceKnobs.removeFromLeft (spaceKnobs.getWidth() / 2).reduced (5));
     layoutKnob (wide, spaceKnobs.reduced (5));
-    auto wideKnobs = spaceArea.removeFromTop (142);
-    layoutKnob (wideFreq, wideKnobs.reduced (5));
-    layoutChoice (depthPosition, spaceArea.removeFromTop (58));
-    auto buttons = spaceArea.removeFromTop (44).reduced (2, 4);
+    auto toneKnobs = spaceArea.removeFromTop (122);
+    const int toneWidth = toneKnobs.getWidth() / 4;
+    layoutKnob (depthDistance, toneKnobs.removeFromLeft (toneWidth).reduced (4));
+    layoutKnob (wideFreq, toneKnobs.removeFromLeft (toneWidth).reduced (4));
+    layoutKnob (wideRate, toneKnobs.removeFromLeft (toneWidth).reduced (4));
+    layoutKnob (diffusorFreq, toneKnobs.reduced (4));
+    auto diffusorRow = spaceArea.removeFromTop (36).reduced (8, 4);
+    allPassPower.button.setBounds (diffusorRow);
+    auto buttons = spaceArea.removeFromTop (46).reduced (2, 5);
     const auto buttonWidth = buttons.getWidth() / 3;
     haasButton.setBounds (buttons.removeFromLeft (buttonWidth).reduced (3));
     flangerButton.setBounds (buttons.removeFromLeft (buttonWidth).reduced (3));
     phaserButton.setBounds (buttons.reduced (3));
 
+    masterArea.removeFromTop (18);
     masterPower.button.setBounds (masterArea.removeFromTop (28));
-    auto masterTop = masterArea.removeFromTop (124);
+    auto masterTop = masterArea.removeFromTop (112);
     layoutKnob (clipper, masterTop.removeFromLeft (masterTop.getWidth() / 3).reduced (4));
     layoutKnob (comp, masterTop.removeFromLeft (masterTop.getWidth() / 2).reduced (4));
-    auto autoArea = masterTop.reduced (4);
-    autoGain.button.setBounds (autoArea.removeFromTop (34));
+    masterTop.reduce (4, 0);
 
-    auto compArea = masterArea.removeFromTop (126);
+    auto compArea = masterArea.removeFromTop (112);
     layoutKnob (compAttack, compArea.removeFromLeft (compArea.getWidth() / 2).reduced (4));
     layoutKnob (compRelease, compArea.reduced (4));
 
-    auto transArea = masterArea.removeFromTop (144);
-    layoutKnob (transient, transArea.removeFromLeft (transArea.getWidth() / 3).reduced (4));
-    layoutKnob (transientAttack, transArea.removeFromLeft (transArea.getWidth() / 2).reduced (4));
-    layoutKnob (transientRelease, transArea.reduced (4));
+    auto transArea = masterArea.removeFromTop (110);
+    const int transWidth = transArea.getWidth() / 3;
+    layoutKnob (transientAttack, transArea.removeFromLeft (transWidth).reduced (3));
+    layoutKnob (transientRelease, transArea.removeFromLeft (transWidth).reduced (3));
+    layoutKnob (transientMix, transArea.reduced (3));
 
-    auto eqArea = masterArea.removeFromTop (106);
+    auto eqArea = masterArea.removeFromTop (122);
     const int eqWidth = eqArea.getWidth() / 5;
     layoutKnob (eqLow, eqArea.removeFromLeft (eqWidth).reduced (2));
     layoutKnob (eqLowMid, eqArea.removeFromLeft (eqWidth).reduced (2));
@@ -251,6 +314,107 @@ void SuperBassAudioProcessorEditor::layoutChoice (Choice& choice, juce::Rectangl
 {
     choice.label.setBounds (bounds.removeFromTop (18));
     choice.box.setBounds (bounds.reduced (2, 4));
+}
+
+SuperBassAudioProcessorEditor::VuMeter::VuMeter (SuperBassAudioProcessor& p)
+    : processor (p)
+{
+}
+
+void SuperBassAudioProcessorEditor::VuMeter::setMode (int newMode)
+{
+    mode = juce::jlimit (0, 2, newMode);
+    displayDb = mode == 0 ? processor.getInputMeterDb()
+             : mode == 1 ? processor.getOutputMeterDb()
+                         : processor.getGainReductionMeterDb();
+}
+
+void SuperBassAudioProcessorEditor::VuMeter::paint (juce::Graphics& g)
+{
+    auto bounds = getLocalBounds().toFloat();
+    const auto face = juce::Colour (218, 200, 162);
+    const auto ink = juce::Colour (61, 47, 35);
+
+    g.setColour (juce::Colour (18, 17, 16));
+    g.fillRoundedRectangle (bounds, 7.0f);
+    g.setColour (panelOutline);
+    g.drawRoundedRectangle (bounds.reduced (0.5f), 7.0f, 1.0f);
+
+    const auto rawDb = mode == 0 ? processor.getInputMeterDb()
+                     : mode == 1 ? processor.getOutputMeterDb()
+                                 : processor.getGainReductionMeterDb();
+    const auto attack = 0.62f;
+    const auto release = mode == 2 ? 0.105f : 0.085f;
+    displayDb += (rawDb - displayDb) * (rawDb > displayDb ? attack : release);
+
+    auto meter = getLocalBounds().reduced (10, 8);
+    g.setGradientFill (juce::ColourGradient (face.brighter (0.06f), 0.0f, static_cast<float> (meter.getY()),
+                                             face.darker (0.16f), 0.0f, static_cast<float> (meter.getBottom()), false));
+    g.fillRoundedRectangle (meter.toFloat(), 6.0f);
+    g.setColour (juce::Colour (112, 89, 56).withAlpha (0.65f));
+    g.drawRoundedRectangle (meter.toFloat().reduced (0.5f), 6.0f, 1.0f);
+
+    auto labelArea = meter.removeFromTop (16);
+    g.setColour (ink.withAlpha (0.78f));
+    g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
+    g.drawText (mode == 0 ? "IN" : mode == 1 ? "OUT" : "GR", labelArea, juce::Justification::centred);
+
+    const auto centre = juce::Point<float> (bounds.getCentreX(), bounds.getBottom() - 16.0f);
+    const auto radius = juce::jmin (bounds.getWidth() * 0.44f, bounds.getHeight() * 0.9f);
+    const auto startAngle = -2.35f;
+    const auto endAngle = -0.79f;
+    const auto vuValue = displayDb + 18.0f;
+    const auto norm = mode == 2
+        ? 1.0f - juce::jlimit (0.0f, 1.0f, std::abs (displayDb) / 20.0f)
+        : juce::jlimit (0.0f, 1.0f, (vuValue + 20.0f) / 26.0f);
+
+    g.setColour (ink.withAlpha (0.56f));
+    juce::Path arc;
+    arc.addCentredArc (centre.x, centre.y, radius, radius, 0.0f, startAngle, endAngle, true);
+    g.strokePath (arc, juce::PathStrokeType (1.3f));
+
+    const std::array<float, 7> tickValues = mode == 2
+        ? std::array<float, 7> { 0.0f, 0.05f, 0.15f, 0.3f, 0.5f, 0.75f, 1.0f }
+        : std::array<float, 7> { 0.0f, 0.19f, 0.38f, 0.58f, 0.77f, 0.88f, 1.0f };
+
+    for (auto tick : tickValues)
+    {
+        const auto angle = startAngle + (endAngle - startAngle) * tick;
+        const auto inner = centre + juce::Point<float> (std::cos (angle), std::sin (angle)) * (radius - 8.0f);
+        const auto outer = centre + juce::Point<float> (std::cos (angle), std::sin (angle)) * (radius - 1.5f);
+        g.setColour (ink.withAlpha (0.62f));
+        g.drawLine (inner.x, inner.y, outer.x, outer.y, tick == 1.0f ? 1.7f : 1.0f);
+    }
+
+    g.setFont (juce::FontOptions (8.2f, juce::Font::bold));
+    g.setColour (ink.withAlpha (0.72f));
+    g.drawText (mode == 2 ? "-20" : "-20", getLocalBounds().reduced (17, 18), juce::Justification::bottomLeft);
+    g.drawText (mode == 2 ? "0" : "+6", getLocalBounds().reduced (17, 18), juce::Justification::bottomRight);
+
+    if (mode != 2)
+    {
+        const auto markY = getLocalBounds().getY() + 36;
+        g.setFont (juce::FontOptions (8.8f, juce::Font::bold));
+        g.setColour (juce::Colour (132, 35, 24).withAlpha (0.9f));
+        g.drawText ("0", getLocalBounds().withTrimmedLeft (100).withTrimmedRight (45).withY (markY).withHeight (12),
+                    juce::Justification::centred);
+        g.drawText ("+3", getLocalBounds().withTrimmedLeft (125).withTrimmedRight (18).withY (markY).withHeight (12),
+                    juce::Justification::centred);
+    }
+
+    const auto needleAngle = startAngle + (endAngle - startAngle) * norm;
+    const auto needleEnd = centre + juce::Point<float> (std::cos (needleAngle), std::sin (needleAngle)) * (radius - 11.0f);
+    g.setColour (juce::Colour (142, 35, 24));
+    g.drawLine (centre.x, centre.y, needleEnd.x, needleEnd.y, 2.0f);
+    g.setColour (ink);
+    g.fillEllipse (centre.x - 4.0f, centre.y - 4.0f, 8.0f, 8.0f);
+
+    auto valueText = mode == 2
+        ? juce::String (displayDb, 1) + " dB"
+        : juce::String (vuValue, 1) + " VU";
+    g.setColour (text);
+    g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
+    g.drawText (valueText, getLocalBounds().removeFromBottom (16), juce::Justification::centred);
 }
 
 SuperBassAudioProcessorEditor::RouteStrip::RouteStrip (SuperBassAudioProcessor& p)

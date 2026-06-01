@@ -44,9 +44,25 @@ private:
     void layoutKnob (Knob& knob, juce::Rectangle<int> bounds);
     void layoutChoice (Choice& choice, juce::Rectangle<int> bounds);
     void setupModeButton (juce::TextButton& button, const juce::String& text, int mode);
+    void setupMeterButton (juce::TextButton& button, const juce::String& text, int mode);
     void setWideMode (int mode);
     void updateWideModeButtons();
+    void setMeterMode (int mode);
+    void updateMeterButtons();
     void timerCallback() override;
+
+    class VuMeter final : public juce::Component
+    {
+    public:
+        explicit VuMeter (SuperBassAudioProcessor&);
+        void setMode (int newMode);
+        void paint (juce::Graphics&) override;
+
+    private:
+        SuperBassAudioProcessor& processor;
+        int mode = 1;
+        float displayDb = -60.0f;
+    };
 
     class RouteStrip final : public juce::Component
     {
@@ -79,15 +95,18 @@ private:
     Knob body;
     Knob bodyFreq;
     Knob depth;
+    Knob depthDistance;
     Knob wide;
     Knob wideFreq;
+    Knob wideRate;
+    Knob diffusorFreq;
     Knob clipper;
     Knob comp;
     Knob compAttack;
     Knob compRelease;
-    Knob transient;
     Knob transientAttack;
     Knob transientRelease;
+    Knob transientMix;
     Knob eqLow;
     Knob eqLowMid;
     Knob eqMid;
@@ -97,16 +116,19 @@ private:
     Toggle openPower;
     Toggle spacePower;
     Toggle masterPower;
-    Toggle autoGain;
-
-    Choice depthPosition;
-    Choice color;
+    Toggle allPassPower;
 
     juce::TextButton haasButton;
     juce::TextButton flangerButton;
     juce::TextButton phaserButton;
+    juce::TextButton meterInButton;
+    juce::TextButton meterOutButton;
+    juce::TextButton meterGrButton;
+
+    VuMeter vuMeter;
 
     juce::Label title;
+    int meterMode = 1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SuperBassAudioProcessorEditor)
 };
