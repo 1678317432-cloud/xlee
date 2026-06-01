@@ -113,6 +113,7 @@ private:
     static bool getBoolParam (juce::AudioProcessorValueTreeState& state, const juce::String& id);
 
     void updateFilters();
+    void resetRealtimeState();
     void processOpen (juce::AudioBuffer<float>& buffer);
     void processSpace (juce::AudioBuffer<float>& buffer);
     void processMaster (juce::AudioBuffer<float>& buffer);
@@ -192,6 +193,7 @@ private:
     float gainReductionMeterSmooth = 0.0f;
     float blockGainReductionDb = 0.0f;
     float wideModPhase = 0.0f;
+    int silentBlockCount = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SuperBassAudioProcessor)
 };

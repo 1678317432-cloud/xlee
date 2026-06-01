@@ -8,12 +8,35 @@ const juce::Colour panelOutline { 78, 73, 65 };
 const juce::Colour gold { 214, 168, 88 };
 const juce::Colour text { 230, 226, 216 };
 const juce::Colour muted { 158, 151, 139 };
+const juce::Colour openAccent { 222, 154, 79 };
+const juce::Colour spaceAccent { 104, 164, 178 };
+const juce::Colour masterAccent { 178, 137, 212 };
 
 void drawSectionTitle (juce::Graphics& g, juce::Rectangle<int> area, const juce::String& name)
 {
     g.setColour (muted);
     g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
     g.drawFittedText (name, area.removeFromTop (18), juce::Justification::centred, 1);
+}
+
+void drawPanel (juce::Graphics& g, juce::Rectangle<int> area, juce::Colour accent)
+{
+    g.setColour (panel);
+    g.fillRoundedRectangle (area.toFloat(), 8.0f);
+    g.setColour (panelOutline);
+    g.drawRoundedRectangle (area.toFloat(), 8.0f, 1.0f);
+    g.setColour (accent.withAlpha (0.55f));
+    g.drawRoundedRectangle (area.toFloat().reduced (1.5f), 7.0f, 1.4f);
+    g.setColour (accent.withAlpha (0.2f));
+    g.fillRoundedRectangle (area.removeFromTop (5).toFloat(), 4.0f);
+}
+
+void drawSubGroup (juce::Graphics& g, juce::Rectangle<int> area, juce::Colour colour)
+{
+    g.setColour (colour.withAlpha (0.22f));
+    g.fillRoundedRectangle (area.toFloat(), 7.0f);
+    g.setColour (colour.withAlpha (0.38f));
+    g.drawRoundedRectangle (area.toFloat().reduced (0.5f), 7.0f, 1.0f);
 }
 }
 
@@ -42,6 +65,7 @@ SuperBassAudioProcessorEditor::SuperBassAudioProcessorEditor (SuperBassAudioProc
     setupKnob (diffusorFreq, "Diff Hz", "spaceDiffusorHz");
     setupKnob (clipper, "Clipper", "masterClipper");
     setupKnob (comp, "Comp", "masterCompression");
+    setupKnob (compThreshold, "Thresh", "masterCompThreshold");
     setupKnob (compAttack, "C Atk", "masterCompAttack");
     setupKnob (compRelease, "C Rel", "masterCompRelease");
     setupKnob (transientAttack, "T Atk", "masterTransientAttack");
@@ -58,6 +82,9 @@ SuperBassAudioProcessorEditor::SuperBassAudioProcessorEditor (SuperBassAudioProc
     setupToggle (masterPower, "Master", "masterEnabled");
     setupToggle (allPassPower, "Diffusor", "spaceAllPassEnabled");
 
+    setupOpenModeButton (punchButton, "PUNCH", 0);
+    setupOpenModeButton (bassHeadButton, "BASSHEAD", 1);
+    setupOpenModeButton (boomButton, "BOOM", 2);
     setupModeButton (haasButton, "HASS", 0);
     setupModeButton (flangerButton, "FLANGER", 1);
     setupModeButton (phaserButton, "PHASER", 2);
@@ -66,6 +93,7 @@ SuperBassAudioProcessorEditor::SuperBassAudioProcessorEditor (SuperBassAudioProc
     setupMeterButton (meterGrButton, "GR", 2);
     addAndMakeVisible (vuMeter);
     addAndMakeVisible (routeStrip);
+    updateOpenModeButtons();
     updateWideModeButtons();
     updateMeterButtons();
     startTimerHz (48);
@@ -122,11 +150,23 @@ void SuperBassAudioProcessorEditor::setupModeButton (juce::TextButton& button, c
 {
     button.setButtonText (buttonText);
     button.setClickingTogglesState (false);
-    button.setColour (juce::TextButton::buttonColourId, juce::Colour (29, 29, 30));
-    button.setColour (juce::TextButton::buttonOnColourId, gold);
+    button.setColour (juce::TextButton::buttonColourId, juce::Colour (25, 32, 34));
+    button.setColour (juce::TextButton::buttonOnColourId, spaceAccent);
     button.setColour (juce::TextButton::textColourOffId, text);
     button.setColour (juce::TextButton::textColourOnId, background);
     button.onClick = [this, mode] { setWideMode (mode); };
+    addAndMakeVisible (button);
+}
+
+void SuperBassAudioProcessorEditor::setupOpenModeButton (juce::TextButton& button, const juce::String& buttonText, int mode)
+{
+    button.setButtonText (buttonText);
+    button.setClickingTogglesState (false);
+    button.setColour (juce::TextButton::buttonColourId, juce::Colour (35, 29, 24));
+    button.setColour (juce::TextButton::buttonOnColourId, openAccent);
+    button.setColour (juce::TextButton::textColourOffId, text);
+    button.setColour (juce::TextButton::textColourOnId, background);
+    button.onClick = [this, mode] { setOpenMode (mode); };
     addAndMakeVisible (button);
 }
 
@@ -153,6 +193,30 @@ void SuperBassAudioProcessorEditor::setWideMode (int mode)
     }
 
     updateWideModeButtons();
+}
+
+void SuperBassAudioProcessorEditor::setOpenMode (int mode)
+{
+    if (auto* param = processor.apvts.getParameter ("openMode"))
+    {
+        const auto normalised = static_cast<float> (juce::jlimit (0, 2, mode)) / 2.0f;
+        param->beginChangeGesture();
+        param->setValueNotifyingHost (normalised);
+        param->endChangeGesture();
+    }
+
+    updateOpenModeButtons();
+}
+
+void SuperBassAudioProcessorEditor::updateOpenModeButtons()
+{
+    const auto mode = static_cast<int> (processor.apvts.getRawParameterValue ("openMode")->load());
+    punchButton.setToggleState (mode == 0, juce::dontSendNotification);
+    bassHeadButton.setToggleState (mode == 1, juce::dontSendNotification);
+    boomButton.setToggleState (mode == 2, juce::dontSendNotification);
+    punchButton.repaint();
+    bassHeadButton.repaint();
+    boomButton.repaint();
 }
 
 void SuperBassAudioProcessorEditor::updateWideModeButtons()
@@ -185,6 +249,7 @@ void SuperBassAudioProcessorEditor::updateMeterButtons()
 
 void SuperBassAudioProcessorEditor::timerCallback()
 {
+    updateOpenModeButtons();
     updateWideModeButtons();
     updateMeterButtons();
     vuMeter.repaint();
@@ -210,13 +275,15 @@ void SuperBassAudioProcessorEditor::paint (juce::Graphics& g)
     auto space = modules.removeFromLeft (modules.getWidth() / 2).reduced (6);
     auto master = modules.reduced (6);
 
-    for (auto area : { open, space, master })
-    {
-        g.setColour (panel);
-        g.fillRoundedRectangle (area.toFloat(), 8.0f);
-        g.setColour (panelOutline);
-        g.drawRoundedRectangle (area.toFloat(), 8.0f, 1.0f);
-    }
+    drawPanel (g, open, openAccent);
+    drawPanel (g, space, spaceAccent);
+    drawPanel (g, master, masterAccent);
+
+    auto spaceGroups = space.reduced (16);
+    spaceGroups.removeFromTop (46);
+    drawSubGroup (g, spaceGroups.removeFromTop (132).reduced (0, 4), spaceAccent.darker (0.7f));
+    drawSubGroup (g, spaceGroups.removeFromTop (168).reduced (0, 4), spaceAccent);
+    drawSubGroup (g, spaceGroups.removeFromTop (40).reduced (0, 4), spaceAccent.brighter (0.35f));
 
     drawSectionTitle (g, smileArea.reduced (12, 10), "GLOBAL");
     drawSectionTitle (g, open.reduced (12, 10), "OPEN");
@@ -232,16 +299,16 @@ void SuperBassAudioProcessorEditor::resized()
     auto content = bounds.removeFromTop (570);
     auto smileArea = content.removeFromLeft (208).reduced (16);
     smileArea.removeFromTop (22);
-    vuMeter.setBounds (smileArea.removeFromTop (112));
-    auto meterButtons = smileArea.removeFromTop (30).reduced (0, 3);
+    vuMeter.setBounds (smileArea.removeFromTop (132));
+    auto meterButtons = smileArea.removeFromTop (32).reduced (0, 3);
     const auto meterButtonWidth = meterButtons.getWidth() / 3;
     meterInButton.setBounds (meterButtons.removeFromLeft (meterButtonWidth).reduced (2));
     meterOutButton.setBounds (meterButtons.removeFromLeft (meterButtonWidth).reduced (2));
     meterGrButton.setBounds (meterButtons.reduced (2));
-    smileArea.removeFromTop (16);
-    layoutKnob (smile, smileArea.removeFromTop (166));
-    smileArea.removeFromTop (6);
-    layoutKnob (outputGain, smileArea.removeFromTop (140));
+    smileArea.removeFromTop (10);
+    layoutKnob (smile, smileArea.removeFromTop (152));
+    smileArea.removeFromTop (4);
+    layoutKnob (outputGain, smileArea.removeFromTop (128));
 
     routeStrip.setBounds (content.removeFromTop (70).reduced (12, 6));
 
@@ -258,6 +325,11 @@ void SuperBassAudioProcessorEditor::resized()
     auto bodyKnobs = openArea.removeFromTop (174);
     layoutKnob (body, bodyKnobs.removeFromLeft (bodyKnobs.getWidth() / 2).reduced (5));
     layoutKnob (bodyFreq, bodyKnobs.reduced (5));
+    auto openButtons = openArea.removeFromTop (50).reduced (2, 7);
+    const auto openButtonWidth = openButtons.getWidth() / 3;
+    punchButton.setBounds (openButtons.removeFromLeft (openButtonWidth).reduced (3));
+    bassHeadButton.setBounds (openButtons.removeFromLeft (openButtonWidth).reduced (3));
+    boomButton.setBounds (openButtons.reduced (3));
 
     spaceArea.removeFromTop (18);
     spacePower.button.setBounds (spaceArea.removeFromTop (28));
@@ -281,9 +353,10 @@ void SuperBassAudioProcessorEditor::resized()
     masterArea.removeFromTop (18);
     masterPower.button.setBounds (masterArea.removeFromTop (28));
     auto masterTop = masterArea.removeFromTop (112);
-    layoutKnob (clipper, masterTop.removeFromLeft (masterTop.getWidth() / 3).reduced (4));
-    layoutKnob (comp, masterTop.removeFromLeft (masterTop.getWidth() / 2).reduced (4));
-    masterTop.reduce (4, 0);
+    const int masterTopWidth = masterTop.getWidth() / 3;
+    layoutKnob (clipper, masterTop.removeFromLeft (masterTopWidth).reduced (4));
+    layoutKnob (comp, masterTop.removeFromLeft (masterTopWidth).reduced (4));
+    layoutKnob (compThreshold, masterTop.reduced (4));
 
     auto compArea = masterArea.removeFromTop (112);
     layoutKnob (compAttack, compArea.removeFromLeft (compArea.getWidth() / 2).reduced (4));
@@ -343,8 +416,8 @@ void SuperBassAudioProcessorEditor::VuMeter::paint (juce::Graphics& g)
     const auto rawDb = mode == 0 ? processor.getInputMeterDb()
                      : mode == 1 ? processor.getOutputMeterDb()
                                  : processor.getGainReductionMeterDb();
-    const auto attack = 0.62f;
-    const auto release = mode == 2 ? 0.105f : 0.085f;
+    const auto attack = 0.55f;
+    const auto release = mode == 2 ? 0.096f : 0.076f;
     displayDb += (rawDb - displayDb) * (rawDb > displayDb ? attack : release);
 
     auto meter = getLocalBounds().reduced (10, 8);
@@ -354,13 +427,13 @@ void SuperBassAudioProcessorEditor::VuMeter::paint (juce::Graphics& g)
     g.setColour (juce::Colour (112, 89, 56).withAlpha (0.65f));
     g.drawRoundedRectangle (meter.toFloat().reduced (0.5f), 6.0f, 1.0f);
 
-    auto labelArea = meter.removeFromTop (16);
+    auto labelArea = meter.removeFromTop (18);
     g.setColour (ink.withAlpha (0.78f));
-    g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
+    g.setFont (juce::FontOptions (11.5f, juce::Font::bold));
     g.drawText (mode == 0 ? "IN" : mode == 1 ? "OUT" : "GR", labelArea, juce::Justification::centred);
 
-    const auto centre = juce::Point<float> (bounds.getCentreX(), bounds.getBottom() - 16.0f);
-    const auto radius = juce::jmin (bounds.getWidth() * 0.44f, bounds.getHeight() * 0.9f);
+    const auto centre = juce::Point<float> (bounds.getCentreX(), bounds.getBottom() - 18.0f);
+    const auto radius = juce::jmin (bounds.getWidth() * 0.46f, bounds.getHeight() * 0.92f);
     const auto startAngle = -2.35f;
     const auto endAngle = -0.79f;
     const auto vuValue = displayDb + 18.0f;
@@ -380,25 +453,26 @@ void SuperBassAudioProcessorEditor::VuMeter::paint (juce::Graphics& g)
     for (auto tick : tickValues)
     {
         const auto angle = startAngle + (endAngle - startAngle) * tick;
-        const auto inner = centre + juce::Point<float> (std::cos (angle), std::sin (angle)) * (radius - 8.0f);
+        const auto important = tick >= 0.77f || tick <= 0.001f;
+        const auto inner = centre + juce::Point<float> (std::cos (angle), std::sin (angle)) * (radius - (important ? 11.0f : 8.0f));
         const auto outer = centre + juce::Point<float> (std::cos (angle), std::sin (angle)) * (radius - 1.5f);
-        g.setColour (ink.withAlpha (0.62f));
-        g.drawLine (inner.x, inner.y, outer.x, outer.y, tick == 1.0f ? 1.7f : 1.0f);
+        g.setColour ((important ? ink : ink.withAlpha (0.62f)));
+        g.drawLine (inner.x, inner.y, outer.x, outer.y, important ? 1.8f : 1.1f);
     }
 
-    g.setFont (juce::FontOptions (8.2f, juce::Font::bold));
-    g.setColour (ink.withAlpha (0.72f));
+    g.setFont (juce::FontOptions (9.4f, juce::Font::bold));
+    g.setColour (ink.withAlpha (0.78f));
     g.drawText (mode == 2 ? "-20" : "-20", getLocalBounds().reduced (17, 18), juce::Justification::bottomLeft);
     g.drawText (mode == 2 ? "0" : "+6", getLocalBounds().reduced (17, 18), juce::Justification::bottomRight);
 
     if (mode != 2)
     {
-        const auto markY = getLocalBounds().getY() + 36;
-        g.setFont (juce::FontOptions (8.8f, juce::Font::bold));
+        const auto markY = getLocalBounds().getY() + 39;
+        g.setFont (juce::FontOptions (10.8f, juce::Font::bold));
         g.setColour (juce::Colour (132, 35, 24).withAlpha (0.9f));
-        g.drawText ("0", getLocalBounds().withTrimmedLeft (100).withTrimmedRight (45).withY (markY).withHeight (12),
+        g.drawText ("0", getLocalBounds().withTrimmedLeft (98).withTrimmedRight (47).withY (markY).withHeight (14),
                     juce::Justification::centred);
-        g.drawText ("+3", getLocalBounds().withTrimmedLeft (125).withTrimmedRight (18).withY (markY).withHeight (12),
+        g.drawText ("+3", getLocalBounds().withTrimmedLeft (126).withTrimmedRight (16).withY (markY).withHeight (14),
                     juce::Justification::centred);
     }
 

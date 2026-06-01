@@ -59,6 +59,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SuperBassAudioProcessor::cre
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("openSubFreq", "Sub Hz", subFreqRange, 58.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("openBody", "Body", percentRange, 34.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("openBodyFreq", "Body Hz", bodyFreqRange, 190.0f));
+    params.push_back (std::make_unique<juce::AudioParameterChoice> ("openMode", "Open Mode", juce::StringArray { "Punch", "BassHead", "Boom" }, 0));
 
     params.push_back (std::make_unique<juce::AudioParameterBool> ("spaceEnabled", "Space", true));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("spaceDepth", "Depth", percentRange, 18.0f));
@@ -73,6 +74,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SuperBassAudioProcessor::cre
     params.push_back (std::make_unique<juce::AudioParameterBool> ("masterEnabled", "Master", true));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("masterClipper", "Clipper", percentRange, 8.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("masterCompression", "Comp", percentRange, 10.0f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("masterCompThreshold", "Comp Threshold", juce::NormalisableRange<float> (-12.0f, 12.0f, 0.1f), 0.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("masterCompAttack", "Comp Attack", juce::NormalisableRange<float> (1.0f, 80.0f, 0.1f, 0.45f), 30.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("masterCompRelease", "Comp Release", juce::NormalisableRange<float> (30.0f, 500.0f, 1.0f, 0.55f), 120.0f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("masterTransientAttack", "Trans Attack", juce::NormalisableRange<float> (-100.0f, 100.0f, 0.1f), 0.0f));
@@ -141,6 +143,7 @@ void SuperBassAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
     compressorEnv = {};
     transientFastEnv = {};
     transientSlowEnv = {};
+    silentBlockCount = 0;
     inputMeterSmooth = -60.0f;
     outputMeterSmooth = -60.0f;
     gainReductionMeterSmooth = 0.0f;
@@ -168,6 +171,7 @@ void SuperBassAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 
 void SuperBassAudioProcessor::releaseResources()
 {
+    resetRealtimeState();
 }
 
 bool SuperBassAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -188,6 +192,17 @@ void SuperBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
     dryBuffer.makeCopyOf (buffer, true);
     updateLevelMeter (dryBuffer, inputMeterSmooth, inputMeterDb);
+
+    if (measureRms (dryBuffer) < 0.000003f)
+    {
+        ++silentBlockCount;
+        if (silentBlockCount == 2)
+            resetRealtimeState();
+    }
+    else
+    {
+        silentBlockCount = 0;
+    }
 
     updateFilters();
 
@@ -239,7 +254,7 @@ void SuperBassAudioProcessor::processModule (ModuleId module, juce::AudioBuffer<
     {
         const auto beforeRms = measurePerceivedLevel (buffer);
         processOpen (buffer);
-        applyModuleLevelMatch (buffer, beforeRms, openLevelSmooth, 0.64f, 1.16f);
+        applyModuleLevelMatch (buffer, beforeRms, openLevelSmooth, 0.6f, 1.12f);
     }
 
     if (module == ModuleId::space && getBoolParam (apvts, "spaceEnabled"))
@@ -253,7 +268,7 @@ void SuperBassAudioProcessor::processModule (ModuleId module, juce::AudioBuffer<
     {
         const auto beforeRms = measurePerceivedLevel (buffer);
         processMaster (buffer);
-        applyModuleLevelMatch (buffer, beforeRms, masterLevelSmooth, 0.68f, 1.1f);
+        applyModuleLevelMatch (buffer, beforeRms, masterLevelSmooth, 0.66f, 1.08f);
     }
 }
 
@@ -276,9 +291,20 @@ void SuperBassAudioProcessor::processOpen (juce::AudioBuffer<float>& buffer)
     const auto bodyAmount = getFloatParam (apvts, "openBody") / 100.0f;
     const auto subFreq = getFloatParam (apvts, "openSubFreq");
     const auto bodyFreq = getFloatParam (apvts, "openBodyFreq");
-    const auto bodyDrive = 1.035f + bodyAmount * 2.05f;
-    const auto subDrive = 1.018f + subAmount * 1.95f;
-    const auto openDensity = juce::jlimit (0.0f, 1.0f, subAmount * 0.48f + bodyAmount * 0.62f);
+    const auto openMode = getChoiceParam (apvts, "openMode");
+    const auto bassHead = openMode == 1 ? 1.0f : 0.0f;
+    const auto boom = openMode == 2 ? 1.0f : 0.0f;
+    const auto punch = openMode == 0 ? 1.0f : 0.0f;
+    const auto bodyDrive = 1.035f + bodyAmount * (2.14f + punch * 0.22f + boom * 1.02f + bassHead * 0.28f);
+    const auto subDrive = 1.018f + subAmount * (1.96f + punch * 0.16f + bassHead * 1.22f + boom * 0.62f);
+    const auto openDensity = juce::jlimit (0.0f, 1.0f,
+        subAmount * (0.52f + punch * 0.08f + bassHead * 0.3f + boom * 0.16f)
+        + bodyAmount * (0.62f + punch * 0.14f + boom * 0.34f));
+    const auto punchFocus = 1.0f + punch * 0.18f + boom * 0.1f;
+    const auto subWeight = 1.0f + punch * 0.1f + bassHead * 0.72f + boom * 0.28f;
+    const auto bodyWeight = 1.0f + punch * 0.22f + boom * 0.5f - bassHead * 0.02f;
+    const auto midExcitement = 1.0f + punch * 0.36f + boom * 0.28f;
+    const auto harmonicControl = 0.18f + bassHead * 0.14f + boom * 0.34f;
 
     if (buffer.getNumChannels() >= 2)
     {
@@ -294,7 +320,7 @@ void SuperBassAudioProcessor::processOpen (juce::AudioBuffer<float>& buffer)
             const auto mid = 0.5f * (left[i] + right[i]);
             const auto side = 0.5f * (left[i] - right[i]);
             const auto lowSide = 0.5f * (sideLpL.processLowPass (left[i]) - sideLpR.processLowPass (right[i]));
-            const auto anchor = juce::jlimit (0.0f, 0.92f, 0.78f * subAmount + 0.42f * bodyAmount);
+            const auto anchor = juce::jlimit (0.0f, 0.98f, (0.86f + punch * 0.08f + bassHead * 0.12f + boom * 0.1f) * subAmount + 0.46f * bodyAmount);
             const auto anchoredSide = side - lowSide * anchor;
             left[i] = mid + anchoredSide;
             right[i] = mid - anchoredSide;
@@ -314,23 +340,27 @@ void SuperBassAudioProcessor::processOpen (juce::AudioBuffer<float>& buffer)
             const auto mid = 0.5f * (left[i] + right[i]);
             const auto side = 0.5f * (left[i] - right[i]);
             const auto subBand = subMidLp.processLowPass (mid * 0.5f);
-            const auto subHarmRaw = subHarmHp.processHighPass (softSaturate (subBand * 1.16f, subDrive));
-            const auto subHarm = subHarmRaw + (subHarmRaw * subHarmRaw * std::copysign (1.0f, subHarmRaw)) * (0.18f * subAmount);
+            const auto subHarmRaw = subHarmHp.processHighPass (softSaturate (subBand * (1.14f + punch * 0.06f + bassHead * 0.28f + boom * 0.12f), subDrive));
+            const auto subEven = (subHarmRaw * subHarmRaw * std::copysign (1.0f, subHarmRaw)) * (0.17f + punch * 0.04f + bassHead * 0.18f + boom * 0.1f) * subAmount;
+            const auto subOdd = (softSaturate (subHarmRaw * (1.0f + punch * 0.55f + boom * 2.2f), 1.0f + punch * 0.72f + boom * 2.75f) - subHarmRaw) * (punch * 0.28f + boom);
+            const auto subHarm = softClip (subHarmRaw + subEven + subOdd * (0.42f + boom * 0.12f), 1.12f - boom * 0.2f - bassHead * 0.04f, 0.88f);
             const auto bodyBand = bodyMidHp.processHighPass (bodyMidLp.processLowPass (mid * 0.5f));
-            const auto bodyEven = softSaturate (bodyBand * (1.0f + bodyAmount * 0.85f), bodyDrive) - bodyBand * 0.12f;
-            const auto bodyOdd = softSaturate (bodyBand * (1.0f + bodyAmount * 1.62f), 1.1f + bodyAmount * 2.18f) - bodyBand;
+            const auto bodyEven = softSaturate (bodyBand * (1.0f + bodyAmount * (0.9f + punch * 0.18f)), bodyDrive) - bodyBand * 0.1f;
+            const auto bodyOdd = softSaturate (bodyBand * (1.0f + bodyAmount * (1.62f + punch * 0.58f + boom * 1.12f)), 1.1f + bodyAmount * (2.16f + punch * 0.62f + boom * 1.46f)) - bodyBand;
+            const auto midSpark = softClip (bodyOdd * midExcitement + bodyEven * 0.38f, 1.0f - boom * 0.08f, 0.78f);
             const auto subPath = mid * 0.5f
-                               + subBand * (0.34f * subAmount)
-                               + subHarm * (0.22f * subAmount);
+                               + subBand * (0.34f * subAmount * subWeight)
+                               + subHarm * ((0.24f + punch * 0.05f + bassHead * 0.14f + boom * 0.08f) * subAmount);
             const auto bodyPath = mid * 0.5f
-                                + bodyBand * (0.44f * bodyAmount)
-                                + bodyEven * (0.21f * bodyAmount)
-                                + bodyOdd * (0.16f * bodyAmount);
+                                + bodyBand * (0.44f * bodyAmount * bodyWeight)
+                                + bodyEven * ((0.21f + punch * 0.03f + bassHead * 0.04f) * bodyAmount)
+                                + midSpark * ((0.17f + punch * 0.09f + boom * 0.15f) * bodyAmount);
             const auto centerLift = (subPath + bodyPath) - mid;
-            const auto focusedMid = softSaturate ((mid + centerLift) * dbToGain (-(subAmount + bodyAmount) * 0.18f),
-                                                  1.02f + bodyAmount * 0.24f);
-            left[i] = focusedMid + side;
-            right[i] = focusedMid - side;
+            const auto focusedMid = softSaturate ((mid + centerLift) * dbToGain (-(subAmount + bodyAmount) * (0.14f + boom * 0.04f)),
+                                                  1.03f + bodyAmount * 0.28f + punch * 0.09f + boom * 0.2f);
+            const auto controlledMid = softClip (focusedMid, 1.18f - boom * 0.16f - bassHead * 0.03f, 0.84f + bassHead * 0.08f);
+            left[i] = controlledMid + side * punchFocus;
+            right[i] = controlledMid - side * punchFocus;
         }
     }
 
@@ -353,23 +383,30 @@ void SuperBassAudioProcessor::processOpen (juce::AudioBuffer<float>& buffer)
             const auto subInput = x * 0.5f;
             const auto bodyInput = x * 0.5f;
             const auto subBand = subLp.processLowPass (subInput);
-            const auto subSaturated = softSaturate (subBand * 1.06f, subDrive);
+            const auto subSaturated = softSaturate (subBand * (1.06f + punch * 0.06f + bassHead * 0.32f + boom * 0.15f), subDrive);
             const auto subHarmRaw = subHp.processHighPass (subSaturated);
-            const auto subHarm = subHarmRaw + (subHarmRaw * subHarmRaw * std::copysign (1.0f, subHarmRaw)) * (0.16f * subAmount);
+            const auto subEven = (subHarmRaw * subHarmRaw * std::copysign (1.0f, subHarmRaw)) * ((0.16f + punch * 0.04f + bassHead * 0.2f + boom * 0.1f) * subAmount);
+            const auto subOdd = (softSaturate (subHarmRaw * (1.0f + punch * 0.5f + boom * 2.05f), 1.0f + punch * 0.68f + boom * 2.55f) - subHarmRaw) * (punch * 0.24f + boom);
+            const auto subHarm = softClip (subHarmRaw + subEven + subOdd * (0.42f + boom * 0.1f), 1.1f - boom * 0.18f - bassHead * 0.04f, 0.88f);
             const auto bodyBand = bodyHp.processHighPass (bodyLp.processLowPass (bodyInput));
-            const auto bodyThick = softSaturate (bodyBand * (1.06f + bodyAmount * 0.82f), bodyDrive);
-            const auto bodyOdd = softSaturate (bodyBand * (1.0f + bodyAmount * 1.65f), 1.06f + bodyAmount * 2.1f) - bodyBand;
-            const auto bodyHarm = bodyThick - bodyBand * 0.08f + bodyOdd * 0.3f;
+            const auto bodyThick = softSaturate (bodyBand * (1.06f + bodyAmount * (0.88f + punch * 0.22f + boom * 0.16f)), bodyDrive);
+            const auto bodyOdd = softSaturate (bodyBand * (1.0f + bodyAmount * (1.62f + punch * 0.62f + boom * 1.16f)), 1.06f + bodyAmount * (2.08f + punch * 0.7f + boom * 1.5f)) - bodyBand;
+            const auto bodyHarm = softClip (bodyThick - bodyBand * 0.06f + bodyOdd * (0.28f + punch * 0.08f + boom * 0.18f),
+                                            1.16f - boom * 0.18f, 0.92f);
 
             const auto subPath = subInput
-                               + subBand * (0.36f * subAmount)
-                               + subHarm * (0.16f * subAmount);
+                               + subBand * (0.36f * subAmount * subWeight)
+                               + subHarm * ((0.18f + punch * 0.04f + bassHead * 0.14f + boom * 0.07f) * subAmount);
             const auto bodyPath = bodyInput
-                                + bodyBand * (0.48f * bodyAmount)
-                                + bodyHarm * (0.22f * bodyAmount);
-            const auto polished = subPath + bodyPath + bodyBand * bodyAmount * 0.045f;
-            const auto compressed = softSaturate (polished * dbToGain (openDensity * 0.34f), 1.04f + bodyAmount * 0.34f);
-            data[i] = juce::jlimit (-3.6f, 3.6f, compressed * dbToGain (-openDensity * 0.58f));
+                                + bodyBand * (0.48f * bodyAmount * bodyWeight)
+                                + bodyHarm * ((0.21f + punch * 0.08f + boom * 0.13f) * bodyAmount);
+            const auto transientForward = (x - softSaturate (x, 1.02f)) * (0.05f * punch + 0.035f * boom);
+            const auto polished = subPath + bodyPath + bodyBand * bodyAmount * (0.045f + punch * 0.035f + boom * 0.02f) + transientForward;
+            const auto driven = softSaturate (polished * dbToGain (openDensity * (0.34f + punch * 0.08f + boom * 0.22f)),
+                                              1.04f + bodyAmount * 0.36f + punch * 0.08f + boom * 0.34f);
+            const auto controlled = softClip (driven, 1.2f - boom * 0.2f - bassHead * 0.06f,
+                                              0.94f - boom * 0.08f + bassHead * 0.06f);
+            data[i] = juce::jlimit (-3.2f, 3.2f, controlled * dbToGain (-openDensity * (0.5f + harmonicControl)));
         }
     }
 }
@@ -458,7 +495,7 @@ void SuperBassAudioProcessor::processSpace (juce::AudioBuffer<float>& buffer)
     {
         auto* left = buffer.getWritePointer (0);
         auto* right = buffer.getWritePointer (1);
-        const auto modeDelayMs = wideMode == 0 ? 11.2f : (wideMode == 1 ? 3.25f : 1.65f);
+        const auto modeDelayMs = wideMode == 0 ? 12.4f : (wideMode == 1 ? 4.15f : 2.25f);
         wideDelaySmooth.setTarget (static_cast<float> (currentSampleRate * modeDelayMs / 1000.0));
 
         for (int i = 0; i < samples; ++i)
@@ -466,14 +503,15 @@ void SuperBassAudioProcessor::processSpace (juce::AudioBuffer<float>& buffer)
             const auto wide = wideSmooth.getNext();
             const auto wideFreq = wideFreqSmooth.getNext();
             const auto rate = wideRateSmooth.getNext();
-            const auto sideCutoff = juce::jlimit (70.0f, 8000.0f, wideFreq);
+            const auto sideCutoff = juce::jlimit (105.0f, 9000.0f, wideFreq);
             sideHighPass[0].setHighPass (sideCutoff);
-            sideHighPass[1].setHighPass (sideCutoff * 1.08f);
+            sideHighPass[1].setHighPass (sideCutoff * 1.06f);
 
             const auto lfo = std::sin (wideModPhase);
-            const auto lfo2 = std::sin (wideModPhase * 0.63f + 1.4f);
-            const auto organicLfo = lfo * 0.82f + lfo2 * 0.18f;
-            const auto baseRate = wideMode == 1 ? 0.115f : (wideMode == 2 ? 0.067f : 0.032f);
+            const auto lfo2 = std::sin (wideModPhase * 0.51f + 1.33f);
+            const auto lfo3 = std::sin (wideModPhase * 1.37f + 0.55f);
+            const auto organicLfo = lfo * 0.74f + lfo2 * 0.18f + lfo3 * 0.08f;
+            const auto baseRate = wideMode == 1 ? 0.145f : (wideMode == 2 ? 0.071f : 0.038f);
             const auto rateScale = wideMode == 0 ? (0.55f + rate * 0.55f)
                                                   : (0.38f + rate * 0.82f);
             wideModPhase += 2.0f * pi * baseRate * rateScale / static_cast<float> (currentSampleRate);
@@ -485,40 +523,45 @@ void SuperBassAudioProcessor::processSpace (juce::AudioBuffer<float>& buffer)
             const auto inputL = left[i];
             const auto inputR = right[i];
             const auto delayBase = wideDelaySmooth.getNext();
-            const auto movementDepth = wideMode == 0 ? (0.72f + rate * 0.1f)
-                                                     : (0.74f + rate * 0.18f);
-            const auto sweep = (wideMode == 0 ? 0.0f : (wideMode == 1 ? 3.55f : 1.18f)) * movementDepth * (organicLfo + 1.0f);
+            const auto movementDepth = wideMode == 0 ? (0.48f + rate * 0.08f)
+                                                     : (wideMode == 1 ? (0.86f + rate * 0.2f) : (0.76f + rate * 0.14f));
+            const auto sweep = (wideMode == 0 ? 0.18f : (wideMode == 1 ? 5.1f : 1.45f)) * movementDepth * (organicLfo + 1.0f);
             const auto delayedL = interpolateDelay (wideDelayBuffer, 0, delayBase + sweep, wideDelayWritePosition);
-            const auto delayedR = interpolateDelay (wideDelayBuffer, 1, delayBase + sweep * 1.29f + 1.12f, wideDelayWritePosition);
+            const auto delayedR = interpolateDelay (wideDelayBuffer, 1, delayBase + sweep * 1.21f + 1.65f, wideDelayWritePosition);
 
-            const auto phaserLHz = juce::jlimit (80.0f, 12000.0f, wideFreq * (0.72f + 0.18f * (organicLfo + 1.0f)));
-            const auto phaserRHz = juce::jlimit (80.0f, 12000.0f, wideFreq * (1.2f - 0.11f * (organicLfo + 1.0f)));
+            const auto phaseSweep = smoothStep (0.5f + 0.5f * organicLfo);
+            const auto phaseSweepAlt = smoothStep (0.5f + 0.5f * std::sin (wideModPhase * 0.79f + 2.1f));
+            const auto phaserLHz = juce::jlimit (120.0f, 10500.0f, wideFreq * (0.42f + 0.92f * phaseSweep));
+            const auto phaserRHz = juce::jlimit (120.0f, 10500.0f, wideFreq * (0.58f + 0.78f * (1.0f - phaseSweepAlt)));
             phaserAllPass[0].setFrequency (phaserLHz);
             phaserAllPass[1].setFrequency (phaserRHz);
-            phaserWarmAllPass[0].setFrequency (juce::jlimit (70.0f, 10000.0f, phaserLHz * 0.42f));
-            phaserWarmAllPass[1].setFrequency (juce::jlimit (70.0f, 10000.0f, phaserRHz * 0.47f));
-            const auto phaseL = phaserWarmAllPass[0].process (phaserAllPass[0].process (mid));
-            const auto phaseR = phaserWarmAllPass[1].process (phaserAllPass[1].process (mid));
+            phaserWarmAllPass[0].setFrequency (juce::jlimit (95.0f, 9000.0f, phaserLHz * (0.32f + phaseSweepAlt * 0.12f)));
+            phaserWarmAllPass[1].setFrequency (juce::jlimit (95.0f, 9000.0f, phaserRHz * (0.36f + phaseSweep * 0.1f)));
+            const auto phaseMid = softSaturate (mid, 1.006f + wide * 0.04f);
+            const auto phaseL = phaserWarmAllPass[0].process (phaserAllPass[0].process (phaseMid));
+            const auto phaseR = phaserWarmAllPass[1].process (phaserAllPass[1].process (phaseMid));
 
             float decorrelated = 0.0f;
             if (wideMode == 0)
-                decorrelated = (delayedR - delayedL) * 0.52f;
+                decorrelated = ((delayedR - delayedL) * 0.46f + (delayedR - inputL - delayedL + inputR) * 0.12f);
             else if (wideMode == 1)
-                decorrelated = ((delayedL - inputR) - (delayedR - inputL)) * 0.46f + (phaseL - phaseR) * 0.14f;
+                decorrelated = ((delayedL - inputR) - (delayedR - inputL)) * 0.6f + (phaseL - phaseR) * 0.22f;
             else
-                decorrelated = (phaseL - phaseR) * 0.7f + (delayedR - delayedL) * 0.11f;
+                decorrelated = (phaseL - phaseR) * 0.94f + (delayedR - delayedL) * 0.12f + sideRaw * 0.08f;
 
             const auto highSide = sideHighPass[0].processHighPass (sideRaw);
             const auto lowSide = sideRaw - highSide;
             const auto highDecorrelated = sideHighPass[1].processHighPass (decorrelated);
+            const auto lowGuard = wideMode == 0 ? 0.82f : (wideMode == 1 ? 0.72f : 0.74f);
+            const auto decorGain = wideMode == 0 ? 0.94f : (wideMode == 1 ? 1.08f : 1.14f);
             const auto side = juce::jlimit (-0.78f, 0.78f,
-                lowSide
-                + highSide * (1.0f + wide * (wideMode == 0 ? 0.78f : 0.62f))
-                + highDecorrelated * wide * (wideMode == 0 ? 0.78f : (wideMode == 1 ? 0.86f : 0.82f)));
-            const auto monoGuard = 1.0f - wide * (wideMode == 0 ? 0.025f : 0.055f);
+                lowSide * (1.0f - wide * (1.0f - lowGuard))
+                + highSide * (1.0f + wide * (wideMode == 0 ? 0.84f : 0.72f))
+                + highDecorrelated * wide * decorGain);
+            const auto monoGuard = 1.0f - wide * (wideMode == 0 ? 0.018f : 0.04f);
             const auto newL = mid * monoGuard + side;
             const auto newR = mid * monoGuard - side;
-            const auto mix = juce::jlimit (0.0f, 0.95f, wide * 1.12f);
+            const auto mix = juce::jlimit (0.0f, 0.96f, wide * (wideMode == 0 ? 1.18f : 1.1f));
             left[i] = inputL + (juce::jlimit (-1.75f, 1.75f, newL) - inputL) * mix;
             right[i] = inputR + (juce::jlimit (-1.75f, 1.75f, newR) - inputR) * mix;
 
@@ -536,13 +579,14 @@ void SuperBassAudioProcessor::processMaster (juce::AudioBuffer<float>& buffer)
     blockGainReductionDb = 0.0f;
     const auto clipper = getFloatParam (apvts, "masterClipper") / 100.0f;
     const auto compression = getFloatParam (apvts, "masterCompression") / 100.0f;
+    const auto compThreshold = getFloatParam (apvts, "masterCompThreshold");
     const auto compAttackMs = getFloatParam (apvts, "masterCompAttack");
     const auto compReleaseMs = getFloatParam (apvts, "masterCompRelease");
     const auto transientAttack = getFloatParam (apvts, "masterTransientAttack") / 100.0f;
     const auto transientRelease = getFloatParam (apvts, "masterTransientRelease") / 100.0f;
     const auto transientMix = getFloatParam (apvts, "masterTransientMix") / 100.0f;
     const auto ratio = 6.0f + compression * 4.0f;
-    const auto thresholdDb = -24.5f + compression * 8.5f;
+    const auto thresholdDb = -24.5f + compression * 8.5f + compThreshold;
     const auto adjustedAttackMs = juce::jlimit (0.38f, 42.0f, compAttackMs * 0.34f + 0.48f);
     const auto adjustedReleaseMs = juce::jlimit (22.0f, 310.0f, compReleaseMs * 0.64f);
     const auto compAttackCoeff = std::exp (-1.0f / static_cast<float> (currentSampleRate * adjustedAttackMs * 0.001f));
@@ -550,10 +594,10 @@ void SuperBassAudioProcessor::processMaster (juce::AudioBuffer<float>& buffer)
     const auto transFastCoeff = std::exp (-1.0f / static_cast<float> (currentSampleRate * 0.0032f));
     const auto sustainMs = 58.0f + (transientRelease + 1.0f) * 86.0f;
     const auto transSlowCoeff = std::exp (-1.0f / static_cast<float> (currentSampleRate * sustainMs * 0.001f));
-    const auto preClipGain = dbToGain (clipper * 1.55f);
-    const auto postClipGain = dbToGain (compression * 0.14f - clipper * 0.78f);
-    const auto threshold = 0.99f - clipper * 0.055f;
-    const auto softness = 0.74f + (1.0f - clipper) * 0.3f;
+    const auto preClipGain = dbToGain (clipper * 1.82f);
+    const auto postClipGain = dbToGain (compression * 0.12f - clipper * 0.9f);
+    const auto threshold = 1.0f - clipper * 0.07f;
+    const auto softness = 0.82f + (1.0f - clipper) * 0.26f;
     const auto eqCharacter = juce::jlimit (0.0f, 1.0f,
         (std::abs (getFloatParam (apvts, "eqLow"))
        + std::abs (getFloatParam (apvts, "eqLowMid"))
@@ -605,20 +649,24 @@ void SuperBassAudioProcessor::processMaster (juce::AudioBuffer<float>& buffer)
 
             const auto lowBeforeClip = masterDetector[channel].processLowPass (x);
             const auto highBeforeClip = x - lowBeforeClip;
+            const auto transientEdge = juce::jlimit (-0.55f, 0.55f, highBeforeClip - softSaturate (highBeforeClip, 1.02f));
             const auto clipInput = x * preClipGain;
             const auto lowInput = lowBeforeClip * preClipGain;
             const auto highInput = highBeforeClip * preClipGain;
             const auto clippedHighA = softClip (highInput, threshold, softness);
-            const auto clippedHighB = softClip (clippedHighA, 0.988f - clipper * 0.022f, 0.9f);
-            const auto clippedFull = softClip (clipInput, threshold + clipper * 0.02f, softness * 1.08f);
-            const auto transientBlend = juce::jlimit (0.0f, 0.46f, 0.26f + clipper * 0.2f);
-            const auto lowPreserve = (lowInput - softClip (lowInput, 1.08f, 1.2f)) * clipper * 0.08f;
-            x = (lowInput + clippedHighB) * (1.0f - transientBlend)
-                + clippedFull * 0.32f
-                + clipInput * (transientBlend * 0.72f)
-                + lowPreserve;
+            const auto clippedHighB = softClip (clippedHighA, 0.992f - clipper * 0.028f, 0.96f);
+            const auto clippedFullA = softClip (clipInput, threshold + clipper * 0.018f, softness * 1.12f);
+            const auto clippedFullB = softClip (clippedFullA, 1.03f - clipper * 0.05f, 1.04f);
+            const auto transientBlend = juce::jlimit (0.0f, 0.4f, 0.2f + clipper * 0.18f);
+            const auto lowControl = softClip (lowInput, 1.12f - clipper * 0.04f, 1.24f);
+            const auto lowPreserve = lowInput + (lowControl - lowInput) * (0.18f + clipper * 0.16f);
+            const auto transientRestore = transientEdge * clipper * 0.16f;
+            x = (lowPreserve + clippedHighB) * (1.0f - transientBlend)
+                + clippedFullB * 0.28f
+                + clipInput * (transientBlend * 0.8f)
+                + transientRestore;
             x *= postClipGain;
-            data[i] = juce::jlimit (-1.35f, 1.35f, x);
+            data[i] = juce::jlimit (-1.3f, 1.3f, x);
         }
     }
 }
@@ -716,7 +764,7 @@ void SuperBassAudioProcessor::applyModuleLevelMatch (juce::AudioBuffer<float>& b
     if (beforeRms > 0.00008f && afterRms > 0.00008f)
     {
         const auto rawGain = beforeRms / afterRms;
-        const auto partialCompensation = 1.0f + (rawGain - 1.0f) * 0.92f;
+        const auto partialCompensation = 1.0f + (rawGain - 1.0f) * 0.86f;
         targetGain = juce::jlimit (minGain, maxGain, partialCompensation);
     }
 
@@ -736,12 +784,17 @@ void SuperBassAudioProcessor::applyWetLevelMatch (juce::AudioBuffer<float>& buff
 
     float targetGain = 1.0f;
     if (dryRms > 0.00008f && wetRms > 0.00008f)
-        targetGain = juce::jlimit (0.58f, 1.22f, dryRms / wetRms);
+    {
+        const auto rawGain = dryRms / wetRms;
+        targetGain = juce::jlimit (0.58f, 1.2f, 1.0f + (rawGain - 1.0f) * 0.88f);
+    }
 
     const auto smile = getFloatParam (apvts, "smile") / 100.0f;
     const auto openDrive = (getFloatParam (apvts, "openSub") + getFloatParam (apvts, "openBody")) / 200.0f;
+    const auto openMode = getChoiceParam (apvts, "openMode");
+    const auto modeDrive = openMode == 1 ? 0.14f : (openMode == 2 ? 0.28f : 0.08f);
     const auto masterDrive = (getFloatParam (apvts, "masterCompression") + getFloatParam (apvts, "masterClipper")) / 200.0f;
-    const auto enhancementTrim = dbToGain (-(openDrive * 0.75f + masterDrive * 0.45f) * smile);
+    const auto enhancementTrim = dbToGain (-(openDrive * (0.68f + modeDrive) + masterDrive * 0.42f) * smile);
     targetGain = juce::jlimit (0.58f, 1.18f, targetGain * enhancementTrim);
 
     wetLevelSmooth.setTarget (targetGain);
@@ -763,9 +816,9 @@ void SuperBassAudioProcessor::applyFinalLevelMatch (juce::AudioBuffer<float>& bu
     {
         const auto rawGain = dryLevel / processedLevel;
         const auto smile = juce::jlimit (0.0f, 1.0f, getFloatParam (apvts, "smile") / 100.0f);
-        const auto correctionDepth = 0.62f + smile * 0.28f;
+        const auto correctionDepth = 0.58f + smile * 0.3f;
         targetGain = 1.0f + (rawGain - 1.0f) * correctionDepth;
-        targetGain = juce::jlimit (0.64f, 1.16f, targetGain);
+        targetGain = juce::jlimit (0.62f, 1.14f, targetGain);
     }
 
     finalLevelSmooth.setTarget (targetGain);
@@ -801,9 +854,37 @@ void SuperBassAudioProcessor::updateFilters()
         eqLow[static_cast<size_t> (ch)].setLowShelf (68.0f, 0.58f, low * 0.78f);
         eqLowMid[static_cast<size_t> (ch)].setPeak (170.0f, 0.5f, lowMid * 0.72f);
         eqMid[static_cast<size_t> (ch)].setPeak (680.0f, 0.46f, mid * 0.68f);
-        eqHighMid[static_cast<size_t> (ch)].setPeak (2550.0f, 0.48f, highMid * 0.66f);
-        eqHigh[static_cast<size_t> (ch)].setHighShelf (9800.0f, 0.62f, high * 0.7f);
+        eqHighMid[static_cast<size_t> (ch)].setPeak (2550.0f, 0.34f, highMid * 0.82f);
+        eqHigh[static_cast<size_t> (ch)].setHighShelf (9800.0f, 0.44f, high * 0.84f);
     }
+}
+
+void SuperBassAudioProcessor::resetRealtimeState()
+{
+    delayBuffer.clear();
+    wideDelayBuffer.clear();
+    delayWritePosition = 0;
+    wideDelayWritePosition = 0;
+    compressorEnv = {};
+    transientFastEnv = {};
+    transientSlowEnv = {};
+    wideModPhase = 0.0f;
+    blockGainReductionDb = 0.0f;
+
+    for (auto* collection : { &subLowPass, &subHarmonicHighPass, &bodyBandLowPass, &bodyBandHighPass, &openSideLowPass, &openCenterLowPass, &openCenterHighPass, &openCenterBodyLowPass, &openCenterBodyHighPass, &depthHighPass, &sideHighPass, &masterDetector })
+        for (auto& filter : *collection)
+            filter.reset();
+
+    for (auto* collection : { &diffusorAllPass, &diffusorWarmAllPass, &phaserAllPass, &phaserWarmAllPass })
+        for (auto& filter : *collection)
+            filter.reset();
+
+    inputMeterSmooth = -60.0f;
+    outputMeterSmooth = -60.0f;
+    gainReductionMeterSmooth = 0.0f;
+    inputMeterDb.store (-60.0f);
+    outputMeterDb.store (-60.0f);
+    gainReductionMeterDb.store (0.0f);
 }
 
 juce::AudioProcessorEditor* SuperBassAudioProcessor::createEditor()

@@ -44,7 +44,10 @@ private:
     void layoutKnob (Knob& knob, juce::Rectangle<int> bounds);
     void layoutChoice (Choice& choice, juce::Rectangle<int> bounds);
     void setupModeButton (juce::TextButton& button, const juce::String& text, int mode);
+    void setupOpenModeButton (juce::TextButton& button, const juce::String& text, int mode);
     void setupMeterButton (juce::TextButton& button, const juce::String& text, int mode);
+    void setOpenMode (int mode);
+    void updateOpenModeButtons();
     void setWideMode (int mode);
     void updateWideModeButtons();
     void setMeterMode (int mode);
@@ -102,6 +105,7 @@ private:
     Knob diffusorFreq;
     Knob clipper;
     Knob comp;
+    Knob compThreshold;
     Knob compAttack;
     Knob compRelease;
     Knob transientAttack;
@@ -118,6 +122,9 @@ private:
     Toggle masterPower;
     Toggle allPassPower;
 
+    juce::TextButton punchButton;
+    juce::TextButton bassHeadButton;
+    juce::TextButton boomButton;
     juce::TextButton haasButton;
     juce::TextButton flangerButton;
     juce::TextButton phaserButton;
