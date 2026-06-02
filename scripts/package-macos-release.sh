@@ -3,19 +3,24 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CMAKE="$ROOT_DIR/tools/cmake-3.31.6-macos-universal/CMake.app/Contents/bin/cmake"
-VERSION="$("$CMAKE" -LA -N "$ROOT_DIR/build/SuperBass" 2>/dev/null | sed -n 's/^SuperBass_VERSION:STATIC=//p' | head -1)"
+BUILD_DIR="$ROOT_DIR/build/SuperBass"
+
+"$ROOT_DIR/scripts/build-au.sh"
+
+VERSION="$(awk '/^[[:space:]]*project[[:space:]]*[(]/ { for (i = 1; i <= NF; ++i) if ($i == "VERSION") { print $(i + 1); exit } }' "$ROOT_DIR/source/SuperBass/CMakeLists.txt" | tr -d ')')"
+
+if [ -z "${VERSION:-}" ]; then
+  VERSION="$("$CMAKE" -LA "$BUILD_DIR" 2>/dev/null | sed -n 's/^CMAKE_PROJECT_VERSION:[^=]*=//p' | head -1)"
+fi
 
 if [ -z "${VERSION:-}" ]; then
   VERSION="0.1.0"
 fi
 
-BUILD_DIR="$ROOT_DIR/build/SuperBass"
 RELEASE_DIR="$ROOT_DIR/build/release/SuperBass-$VERSION-macOS"
 ROOT_STAGE="$RELEASE_DIR/root"
 PKG_PATH="$RELEASE_DIR/SuperBass-$VERSION-macOS.pkg"
 DMG_PATH="$HOME/Downloads/SuperBass-$VERSION-macOS.dmg"
-
-"$ROOT_DIR/scripts/build-au.sh"
 
 AU_SRC="$BUILD_DIR/SuperBass_artefacts/Release/AU/Super Bass.component"
 VST3_SRC="$BUILD_DIR/SuperBass_artefacts/Release/VST3/Super Bass.vst3"

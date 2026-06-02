@@ -28,7 +28,7 @@ public:
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
     void setCurrentProgram (int) override {}
-    const juce::String getProgramName (int) override { return {}; }
+    const juce::String getProgramName (int) override { return "Default"; }
     void changeProgramName (int, const juce::String&) override {}
 
     void getStateInformation (juce::MemoryBlock& destData) override;
@@ -101,11 +101,14 @@ private:
         void reset (double sampleRate, float seconds);
         void setCurrentAndTarget (float newValue);
         void setTarget (float newTarget);
+        void updateSampleRate (double sampleRate);
         float getNext();
+        float getNext (int numSteps);
 
         float current = 0.0f;
         float target = 0.0f;
         float coefficient = 0.001f;
+        float timeSeconds = 0.001f;
     };
 
     static float getFloatParam (juce::AudioProcessorValueTreeState& state, const juce::String& id);
@@ -120,7 +123,21 @@ private:
     void processSmile (juce::AudioBuffer<float>& buffer);
     void processModule (ModuleId module, juce::AudioBuffer<float>& buffer);
     void processRouting (juce::AudioBuffer<float>& buffer, const std::array<ModuleId, 3>& order);
+    void processRoutingOversampled (juce::AudioBuffer<float>& buffer, const std::array<ModuleId, 3>& order,
+                                    juce::dsp::Oversampling<float>& oversampler, int factor);
+    float generateOpenPsychoHarmonics (float subBand, OnePole& harmonicHighPass, OnePole& harmonicLowPass,
+                                       float& fastEnv, float& slowEnv, float amount);
     std::array<ModuleId, 3> getRoutingOrder() const;
+    int getOversamplingIndex() const;
+    int getOversamplingFactor() const;
+    juce::dsp::Oversampling<float>* getActiveOversampler() const;
+    int getActiveOversamplingLatency() const;
+    void prepareOversampling (int channels, int samplesPerBlock);
+    void updateOversamplingState();
+    void setRealtimeProcessingSampleRate (double sampleRate);
+    void updateLatencyCompensatedDryBuffer (int latencySamples, int numChannels, int numSamples);
+    void applyOversamplingTransitionFade (juce::AudioBuffer<float>& buffer);
+    void applyStartupRamp (juce::AudioBuffer<float>& buffer);
     float measureRms (const juce::AudioBuffer<float>& buffer) const;
     float measurePerceivedLevel (const juce::AudioBuffer<float>& buffer) const;
     void updateLevelMeter (const juce::AudioBuffer<float>& buffer, float& smoother, std::atomic<float>& target);
@@ -132,12 +149,18 @@ private:
     void applyOutputGain (juce::AudioBuffer<float>& buffer);
 
     static float softSaturate (float x, float drive);
+    static float thickSaturate (float x, float drive, float tone);
     static float softClip (float x, float threshold, float softness);
 
     juce::AudioBuffer<float> dryBuffer;
+    juce::AudioBuffer<float> alignedDryBuffer;
     juce::AudioBuffer<float> scratchBuffer;
+    juce::AudioBuffer<float> oversampledDryBuffer;
+    juce::AudioBuffer<float> dryLatencyBuffer;
     juce::AudioBuffer<float> delayBuffer;
     juce::AudioBuffer<float> wideDelayBuffer;
+    std::array<std::unique_ptr<juce::dsp::Oversampling<float>>, 3> oversamplers;
+    std::array<float*, 2> oversampledChannelPointers {};
 
     std::array<OnePole, 2> subLowPass;
     std::array<OnePole, 2> subHarmonicHighPass;
@@ -148,6 +171,30 @@ private:
     std::array<OnePole, 2> openCenterHighPass;
     std::array<OnePole, 2> openCenterBodyLowPass;
     std::array<OnePole, 2> openCenterBodyHighPass;
+    std::array<OnePole, 2> openDeltaPolishLowPass;
+    std::array<OnePole, 2> openCenterDeltaPolishLowPass;
+    std::array<OnePole, 2> openSubPolishLowPass;
+    std::array<OnePole, 2> openCenterSubPolishLowPass;
+    std::array<OnePole, 2> openSubEvenPolishLowPass;
+    std::array<OnePole, 2> openCenterSubEvenPolishLowPass;
+    std::array<OnePole, 2> openSubOddPolishLowPass;
+    std::array<OnePole, 2> openCenterSubOddPolishLowPass;
+    std::array<OnePole, 2> openBodyPolishLowPass;
+    std::array<OnePole, 2> openCenterBodyPolishLowPass;
+    std::array<OnePole, 2> openBodyEvenPolishLowPass;
+    std::array<OnePole, 2> openCenterBodyEvenPolishLowPass;
+    std::array<OnePole, 2> openBodyOddPolishLowPass;
+    std::array<OnePole, 2> openCenterBodyOddPolishLowPass;
+    std::array<OnePole, 2> openMidPolishLowPass;
+    std::array<OnePole, 2> openCenterMidPolishLowPass;
+    std::array<OnePole, 2> openMidDrivePolishLowPass;
+    std::array<OnePole, 2> openCenterMidDrivePolishLowPass;
+    std::array<OnePole, 2> openBoomPolishLowPass;
+    std::array<OnePole, 2> openCenterBoomPolishLowPass;
+    std::array<OnePole, 2> openPsychoHarmonicHighPass;
+    std::array<OnePole, 2> openPsychoHarmonicLowPass;
+    std::array<OnePole, 2> openPsychoCenterHarmonicHighPass;
+    std::array<OnePole, 2> openPsychoCenterHarmonicLowPass;
     std::array<OnePole, 2> depthHighPass;
     std::array<OnePole, 2> sideHighPass;
     std::array<AllPass, 2> diffusorAllPass;
@@ -170,6 +217,10 @@ private:
     SmoothValue masterLevelSmooth;
     SmoothValue finalLevelSmooth;
     SmoothValue outputGainSmooth;
+    SmoothValue openSubSmooth;
+    SmoothValue openBodySmooth;
+    SmoothValue openSubFreqSmooth;
+    SmoothValue openBodyFreqSmooth;
     SmoothValue depthSmooth;
     SmoothValue depthDistanceSmooth;
     SmoothValue wideSmooth;
@@ -177,6 +228,14 @@ private:
     SmoothValue wideRateSmooth;
     SmoothValue diffusorFreqSmooth;
     SmoothValue wideDelaySmooth;
+    SmoothValue masterClipperSmooth;
+    SmoothValue masterCompressionSmooth;
+    SmoothValue masterThresholdSmooth;
+    SmoothValue masterAttackSmooth;
+    SmoothValue masterReleaseSmooth;
+    SmoothValue transientAttackSmooth;
+    SmoothValue transientReleaseSmooth;
+    SmoothValue transientMixSmooth;
 
     double currentSampleRate = 44100.0;
     int delayWritePosition = 0;
@@ -185,6 +244,20 @@ private:
     std::array<float, 2> compressorEnv {};
     std::array<float, 2> transientFastEnv {};
     std::array<float, 2> transientSlowEnv {};
+    std::array<float, 2> masterClipPeakEnv {};
+    std::array<float, 2> masterClipBodyEnv {};
+    std::array<float, 2> openPsychoFastEnv {};
+    std::array<float, 2> openPsychoSlowEnv {};
+    std::array<float, 2> openPsychoCenterFastEnv {};
+    std::array<float, 2> openPsychoCenterSlowEnv {};
+    std::array<float, 2> openStabilityEnv {};
+    std::array<float, 2> openSubControlEnv {};
+    std::array<float, 2> openBodyControlEnv {};
+    std::array<float, 2> openMidControlEnv {};
+    float openCenterStabilityEnv = 0.0f;
+    float openCenterSubControlEnv = 0.0f;
+    float openCenterBodyControlEnv = 0.0f;
+    float openCenterMidControlEnv = 0.0f;
     std::atomic<float> inputMeterDb { -60.0f };
     std::atomic<float> outputMeterDb { -60.0f };
     std::atomic<float> gainReductionMeterDb { 0.0f };
@@ -193,6 +266,13 @@ private:
     float gainReductionMeterSmooth = 0.0f;
     float blockGainReductionDb = 0.0f;
     float wideModPhase = 0.0f;
+    int activeOversamplingIndex = 0;
+    int oversamplingLatencySamples = 0;
+    int dryLatencyWritePosition = 0;
+    int oversamplingFadeSamplesTotal = 1;
+    int oversamplingFadeSamplesRemaining = 0;
+    int startupRampSamplesTotal = 1;
+    int startupRampSamplesRemaining = 0;
     int silentBlockCount = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SuperBassAudioProcessor)

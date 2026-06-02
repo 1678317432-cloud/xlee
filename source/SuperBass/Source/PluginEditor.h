@@ -1,5 +1,6 @@
 #pragma once
 
+#include <vector>
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "PluginProcessor.h"
 
@@ -45,14 +46,40 @@ private:
     void layoutChoice (Choice& choice, juce::Rectangle<int> bounds);
     void setupModeButton (juce::TextButton& button, const juce::String& text, int mode);
     void setupOpenModeButton (juce::TextButton& button, const juce::String& text, int mode);
+    void setupOversamplingButton (juce::TextButton& button, const juce::String& text, int mode);
     void setupMeterButton (juce::TextButton& button, const juce::String& text, int mode);
     void setOpenMode (int mode);
     void updateOpenModeButtons();
+    void updateOpenLinkButton();
+    void setOpenLinkEnabled (bool shouldBeEnabled);
+    void syncLinkedOpenFrequency (const juce::String& changedParamId);
     void setWideMode (int mode);
     void updateWideModeButtons();
+    void setOversamplingMode (int mode);
+    void updateOversamplingButtons();
     void setMeterMode (int mode);
     void updateMeterButtons();
+    void setupPresetControls();
+    void refreshPresetList();
+    void loadSelectedPreset();
+    void savePreset();
+    void renamePreset();
+    void browsePresets();
+    void applyFactoryPreset (int factoryIndex);
+    void setPresetParameter (const juce::String& paramId, float value);
+    void writePresetFile (const juce::File& file);
+    void loadPresetFile (const juce::File& file);
+    juce::File getPresetDirectory() const;
     void timerCallback() override;
+
+    struct PresetEntry
+    {
+        juce::String name;
+        bool isFactory = false;
+        bool isHeader = false;
+        int factoryIndex = -1;
+        juce::File file;
+    };
 
     class VuMeter final : public juce::Component
     {
@@ -122,6 +149,8 @@ private:
     Toggle masterPower;
     Toggle allPassPower;
 
+    juce::TextButton openFreqLinkButton;
+    std::unique_ptr<ButtonAttachment> openFreqLinkAttachment;
     juce::TextButton punchButton;
     juce::TextButton bassHeadButton;
     juce::TextButton boomButton;
@@ -131,10 +160,24 @@ private:
     juce::TextButton meterInButton;
     juce::TextButton meterOutButton;
     juce::TextButton meterGrButton;
+    juce::TextButton oversampling1xButton;
+    juce::TextButton oversampling2xButton;
+    juce::TextButton oversampling4xButton;
+    juce::TextButton oversampling8xButton;
+    juce::Label oversamplingLabel;
+    juce::Label presetLabel;
+    juce::ComboBox presetBox;
+    juce::TextButton presetLoadButton;
+    juce::TextButton presetSaveButton;
+    juce::TextButton presetRenameButton;
+    juce::TextButton presetBrowseButton;
 
     VuMeter vuMeter;
 
     juce::Label title;
+    std::vector<PresetEntry> presetEntries;
+    bool suppressPresetChange = false;
+    bool suppressOpenLinkSync = false;
     int meterMode = 1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SuperBassAudioProcessorEditor)

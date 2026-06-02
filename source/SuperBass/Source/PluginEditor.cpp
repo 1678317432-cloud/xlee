@@ -43,7 +43,7 @@ void drawSubGroup (juce::Graphics& g, juce::Rectangle<int> area, juce::Colour co
 SuperBassAudioProcessorEditor::SuperBassAudioProcessorEditor (SuperBassAudioProcessor& p)
     : AudioProcessorEditor (&p), processor (p), routeStrip (p), vuMeter (p)
 {
-    setSize (1240, 680);
+    setSize (1240, 740);
 
     title.setText ("Super Bass", juce::dontSendNotification);
     title.setJustificationType (juce::Justification::centred);
@@ -71,11 +71,11 @@ SuperBassAudioProcessorEditor::SuperBassAudioProcessorEditor (SuperBassAudioProc
     setupKnob (transientAttack, "T Atk", "masterTransientAttack");
     setupKnob (transientRelease, "T Rel", "masterTransientRelease");
     setupKnob (transientMix, "Trans Mix", "masterTransientMix");
-    setupKnob (eqLow, "60", "eqLow");
-    setupKnob (eqLowMid, "160", "eqLowMid");
-    setupKnob (eqMid, "500", "eqMid");
-    setupKnob (eqHighMid, "2k", "eqHighMid");
-    setupKnob (eqHigh, "8k", "eqHigh");
+    setupKnob (eqLow, "45", "eqLow");
+    setupKnob (eqLowMid, "72", "eqLowMid");
+    setupKnob (eqMid, "108", "eqMid");
+    setupKnob (eqHighMid, "185", "eqHighMid");
+    setupKnob (eqHigh, "520", "eqHigh");
 
     setupToggle (openPower, "Open", "openEnabled");
     setupToggle (spacePower, "Space", "spaceEnabled");
@@ -85,16 +85,43 @@ SuperBassAudioProcessorEditor::SuperBassAudioProcessorEditor (SuperBassAudioProc
     setupOpenModeButton (punchButton, "PUNCH", 0);
     setupOpenModeButton (bassHeadButton, "BASSHEAD", 1);
     setupOpenModeButton (boomButton, "BOOM", 2);
+    openFreqLinkButton.setButtonText ("LINK");
+    openFreqLinkButton.setClickingTogglesState (true);
+    openFreqLinkButton.setColour (juce::TextButton::buttonColourId, juce::Colour (35, 29, 24));
+    openFreqLinkButton.setColour (juce::TextButton::buttonOnColourId, openAccent);
+    openFreqLinkButton.setColour (juce::TextButton::textColourOffId, text);
+    openFreqLinkButton.setColour (juce::TextButton::textColourOnId, background);
+    openFreqLinkAttachment = std::make_unique<ButtonAttachment> (processor.apvts, "openFreqLink", openFreqLinkButton);
+    addAndMakeVisible (openFreqLinkButton);
     setupModeButton (haasButton, "HASS", 0);
     setupModeButton (flangerButton, "FLANGER", 1);
     setupModeButton (phaserButton, "PHASER", 2);
     setupMeterButton (meterInButton, "IN", 0);
     setupMeterButton (meterOutButton, "OUT", 1);
     setupMeterButton (meterGrButton, "GR", 2);
+    setupOversamplingButton (oversampling1xButton, "1x", 0);
+    setupOversamplingButton (oversampling2xButton, "2x", 1);
+    setupOversamplingButton (oversampling4xButton, "4x", 2);
+    setupOversamplingButton (oversampling8xButton, "8x", 3);
+    oversamplingLabel.setText ("OVERSAMPLING", juce::dontSendNotification);
+    oversamplingLabel.setJustificationType (juce::Justification::centred);
+    oversamplingLabel.setColour (juce::Label::textColourId, muted);
+    oversamplingLabel.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+    addAndMakeVisible (oversamplingLabel);
+    setupPresetControls();
     addAndMakeVisible (vuMeter);
     addAndMakeVisible (routeStrip);
+    subFreq.slider.onValueChange = [this] { syncLinkedOpenFrequency ("openSubFreq"); };
+    bodyFreq.slider.onValueChange = [this] { syncLinkedOpenFrequency ("openBodyFreq"); };
+    openFreqLinkButton.onClick = [this]
+    {
+        setOpenLinkEnabled (openFreqLinkButton.getToggleState());
+    };
+    refreshPresetList();
     updateOpenModeButtons();
+    updateOpenLinkButton();
     updateWideModeButtons();
+    updateOversamplingButtons();
     updateMeterButtons();
     startTimerHz (48);
 }
@@ -170,6 +197,18 @@ void SuperBassAudioProcessorEditor::setupOpenModeButton (juce::TextButton& butto
     addAndMakeVisible (button);
 }
 
+void SuperBassAudioProcessorEditor::setupOversamplingButton (juce::TextButton& button, const juce::String& buttonText, int mode)
+{
+    button.setButtonText (buttonText);
+    button.setClickingTogglesState (false);
+    button.setColour (juce::TextButton::buttonColourId, juce::Colour (29, 28, 27));
+    button.setColour (juce::TextButton::buttonOnColourId, gold);
+    button.setColour (juce::TextButton::textColourOffId, text);
+    button.setColour (juce::TextButton::textColourOnId, background);
+    button.onClick = [this, mode] { setOversamplingMode (mode); };
+    addAndMakeVisible (button);
+}
+
 void SuperBassAudioProcessorEditor::setupMeterButton (juce::TextButton& button, const juce::String& buttonText, int mode)
 {
     button.setButtonText (buttonText);
@@ -219,6 +258,47 @@ void SuperBassAudioProcessorEditor::updateOpenModeButtons()
     boomButton.repaint();
 }
 
+void SuperBassAudioProcessorEditor::setOpenLinkEnabled (bool shouldBeEnabled)
+{
+    if (shouldBeEnabled)
+    {
+        const auto linkedHz = juce::jlimit (60.0, 256.0, subFreq.slider.getValue());
+        suppressOpenLinkSync = true;
+        if (std::abs (subFreq.slider.getValue() - linkedHz) > 0.0001)
+            subFreq.slider.setValue (linkedHz, juce::sendNotificationSync);
+        if (std::abs (bodyFreq.slider.getValue() - linkedHz) > 0.0001)
+            bodyFreq.slider.setValue (linkedHz, juce::sendNotificationSync);
+        suppressOpenLinkSync = false;
+    }
+
+    updateOpenLinkButton();
+}
+
+void SuperBassAudioProcessorEditor::updateOpenLinkButton()
+{
+    const auto linked = processor.apvts.getRawParameterValue ("openFreqLink")->load() > 0.5f;
+    openFreqLinkButton.setToggleState (linked, juce::dontSendNotification);
+    if (linked)
+        syncLinkedOpenFrequency ("openSubFreq");
+    openFreqLinkButton.repaint();
+}
+
+void SuperBassAudioProcessorEditor::syncLinkedOpenFrequency (const juce::String& changedParamId)
+{
+    if (suppressOpenLinkSync || processor.apvts.getRawParameterValue ("openFreqLink")->load() <= 0.5f)
+        return;
+
+    suppressOpenLinkSync = true;
+    const auto requestedHz = changedParamId == "openSubFreq" ? subFreq.slider.getValue()
+                                                             : bodyFreq.slider.getValue();
+    const auto linkedHz = juce::jlimit (60.0, 256.0, requestedHz);
+    if (std::abs (subFreq.slider.getValue() - linkedHz) > 0.0001)
+        subFreq.slider.setValue (linkedHz, juce::sendNotificationSync);
+    if (std::abs (bodyFreq.slider.getValue() - linkedHz) > 0.0001)
+        bodyFreq.slider.setValue (linkedHz, juce::sendNotificationSync);
+    suppressOpenLinkSync = false;
+}
+
 void SuperBassAudioProcessorEditor::updateWideModeButtons()
 {
     const auto mode = static_cast<int> (processor.apvts.getRawParameterValue ("spaceWideMode")->load());
@@ -228,6 +308,32 @@ void SuperBassAudioProcessorEditor::updateWideModeButtons()
     haasButton.repaint();
     flangerButton.repaint();
     phaserButton.repaint();
+}
+
+void SuperBassAudioProcessorEditor::setOversamplingMode (int mode)
+{
+    if (auto* param = processor.apvts.getParameter ("oversampling"))
+    {
+        const auto normalised = static_cast<float> (juce::jlimit (0, 3, mode)) / 3.0f;
+        param->beginChangeGesture();
+        param->setValueNotifyingHost (normalised);
+        param->endChangeGesture();
+    }
+
+    updateOversamplingButtons();
+}
+
+void SuperBassAudioProcessorEditor::updateOversamplingButtons()
+{
+    const auto mode = static_cast<int> (processor.apvts.getRawParameterValue ("oversampling")->load());
+    oversampling1xButton.setToggleState (mode == 0, juce::dontSendNotification);
+    oversampling2xButton.setToggleState (mode == 1, juce::dontSendNotification);
+    oversampling4xButton.setToggleState (mode == 2, juce::dontSendNotification);
+    oversampling8xButton.setToggleState (mode == 3, juce::dontSendNotification);
+    oversampling1xButton.repaint();
+    oversampling2xButton.repaint();
+    oversampling4xButton.repaint();
+    oversampling8xButton.repaint();
 }
 
 void SuperBassAudioProcessorEditor::setMeterMode (int mode)
@@ -247,10 +353,266 @@ void SuperBassAudioProcessorEditor::updateMeterButtons()
     meterGrButton.repaint();
 }
 
+void SuperBassAudioProcessorEditor::setupPresetControls()
+{
+    presetLabel.setText ("PRESET", juce::dontSendNotification);
+    presetLabel.setJustificationType (juce::Justification::centredRight);
+    presetLabel.setColour (juce::Label::textColourId, muted);
+    presetLabel.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+    addAndMakeVisible (presetLabel);
+
+    presetBox.setColour (juce::ComboBox::backgroundColourId, juce::Colour (27, 27, 28));
+    presetBox.setColour (juce::ComboBox::textColourId, text);
+    presetBox.setColour (juce::ComboBox::outlineColourId, panelOutline);
+    presetBox.setColour (juce::ComboBox::arrowColourId, gold);
+    presetBox.onChange = [this]
+    {
+        if (! suppressPresetChange)
+            loadSelectedPreset();
+    };
+    addAndMakeVisible (presetBox);
+
+    auto setupButton = [this] (juce::TextButton& button, const juce::String& label)
+    {
+        button.setButtonText (label);
+        button.setColour (juce::TextButton::buttonColourId, juce::Colour (29, 29, 30));
+        button.setColour (juce::TextButton::buttonOnColourId, gold);
+        button.setColour (juce::TextButton::textColourOffId, text);
+        button.setColour (juce::TextButton::textColourOnId, background);
+        addAndMakeVisible (button);
+    };
+
+    setupButton (presetLoadButton, "LOAD");
+    setupButton (presetSaveButton, "SAVE AS");
+    setupButton (presetRenameButton, "FOLDER");
+    setupButton (presetBrowseButton, "BROWSE");
+
+    presetLoadButton.onClick = [this] { loadSelectedPreset(); };
+    presetSaveButton.onClick = [this] { savePreset(); };
+    presetRenameButton.onClick = [this] { renamePreset(); };
+    presetBrowseButton.onClick = [this] { browsePresets(); };
+}
+
+juce::File SuperBassAudioProcessorEditor::getPresetDirectory() const
+{
+    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+        .getChildFile ("Xlee Audio")
+        .getChildFile ("Super Bass")
+        .getChildFile ("Presets");
+}
+
+void SuperBassAudioProcessorEditor::refreshPresetList()
+{
+    const auto previousId = presetBox.getSelectedId();
+    presetEntries.clear();
+    presetBox.clear (juce::dontSendNotification);
+
+    presetEntries.push_back ({ "Factory Presets", true, true, -1, {} });
+    presetBox.addSectionHeading (presetEntries.back().name);
+    const juce::StringArray factoryNames { "Default", "Punch Weight", "BassHead Depth", "Boom Thick" };
+    for (int i = 0; i < factoryNames.size(); ++i)
+    {
+        presetEntries.push_back ({ factoryNames[i], true, false, i, {} });
+        presetBox.addItem (presetEntries.back().name, static_cast<int> (presetEntries.size()));
+    }
+
+    auto presetDir = getPresetDirectory();
+    presetDir.createDirectory();
+    juce::Array<juce::File> files;
+    presetDir.findChildFiles (files, juce::File::findFiles, false, "*.superbass");
+    files.sort();
+
+    presetEntries.push_back ({ "User Presets", false, true, -1, {} });
+    presetBox.addSectionHeading (presetEntries.back().name);
+    for (const auto& file : files)
+    {
+        presetEntries.push_back ({ file.getFileNameWithoutExtension(), false, false, -1, file });
+        presetBox.addItem (presetEntries.back().name, static_cast<int> (presetEntries.size()));
+    }
+
+    suppressPresetChange = true;
+    presetBox.setSelectedId (previousId > 0 && previousId <= static_cast<int> (presetEntries.size()) ? previousId : 2,
+                             juce::dontSendNotification);
+    suppressPresetChange = false;
+}
+
+void SuperBassAudioProcessorEditor::setPresetParameter (const juce::String& paramId, float value)
+{
+    if (auto* ranged = processor.apvts.getParameter (paramId))
+    {
+        if (auto* parameter = dynamic_cast<juce::RangedAudioParameter*> (ranged))
+        {
+            parameter->beginChangeGesture();
+            parameter->setValueNotifyingHost (parameter->convertTo0to1 (value));
+            parameter->endChangeGesture();
+        }
+    }
+}
+
+void SuperBassAudioProcessorEditor::applyFactoryPreset (int factoryIndex)
+{
+    setPresetParameter ("smile", 100.0f);
+    setPresetParameter ("output", 0.0f);
+    setPresetParameter ("openEnabled", 1.0f);
+    setPresetParameter ("spaceEnabled", 1.0f);
+    setPresetParameter ("masterEnabled", 1.0f);
+    setPresetParameter ("openFreqLink", 0.0f);
+    setPresetParameter ("routingOrder", 0.0f);
+    setPresetParameter ("oversampling", 0.0f);
+    setPresetParameter ("eqLow", 0.0f);
+    setPresetParameter ("eqLowMid", 0.0f);
+    setPresetParameter ("eqMid", 0.0f);
+    setPresetParameter ("eqHighMid", 0.0f);
+    setPresetParameter ("eqHigh", 0.0f);
+
+    if (factoryIndex == 1)
+    {
+        setPresetParameter ("openMode", 0.0f);
+        setPresetParameter ("openSub", 82.0f);
+        setPresetParameter ("openSubFreq", 58.0f);
+        setPresetParameter ("openBody", 78.0f);
+        setPresetParameter ("openBodyFreq", 135.0f);
+        setPresetParameter ("spaceDepth", 34.0f);
+        setPresetParameter ("spaceWide", 38.0f);
+        setPresetParameter ("masterClipper", 18.0f);
+        setPresetParameter ("masterCompression", 16.0f);
+    }
+    else if (factoryIndex == 2)
+    {
+        setPresetParameter ("openMode", 1.0f);
+        setPresetParameter ("openSub", 100.0f);
+        setPresetParameter ("openSubFreq", 48.0f);
+        setPresetParameter ("openBody", 62.0f);
+        setPresetParameter ("openBodyFreq", 96.0f);
+        setPresetParameter ("spaceDepth", 56.0f);
+        setPresetParameter ("spaceWide", 28.0f);
+        setPresetParameter ("masterClipper", 10.0f);
+        setPresetParameter ("masterCompression", 12.0f);
+    }
+    else if (factoryIndex == 3)
+    {
+        setPresetParameter ("openMode", 2.0f);
+        setPresetParameter ("openSub", 72.0f);
+        setPresetParameter ("openSubFreq", 64.0f);
+        setPresetParameter ("openBody", 92.0f);
+        setPresetParameter ("openBodyFreq", 180.0f);
+        setPresetParameter ("spaceDepth", 42.0f);
+        setPresetParameter ("spaceWide", 52.0f);
+        setPresetParameter ("masterClipper", 22.0f);
+        setPresetParameter ("masterCompression", 14.0f);
+    }
+    else
+    {
+        setPresetParameter ("openMode", 0.0f);
+        setPresetParameter ("openSub", 100.0f);
+        setPresetParameter ("openSubFreq", 61.1f);
+        setPresetParameter ("openBody", 100.0f);
+        setPresetParameter ("openBodyFreq", 93.2f);
+        setPresetParameter ("spaceDepth", 100.0f);
+        setPresetParameter ("spaceDepthDistance", 80.0f);
+        setPresetParameter ("spaceWide", 100.0f);
+        setPresetParameter ("spaceWideFreq", 300.0f);
+        setPresetParameter ("spaceWideRate", 0.7f);
+        setPresetParameter ("spaceWideMode", 1.0f);
+        setPresetParameter ("spaceAllPassEnabled", 0.0f);
+        setPresetParameter ("spaceDiffusorHz", 200.0f);
+        setPresetParameter ("masterClipper", 0.0f);
+        setPresetParameter ("masterCompression", 0.0f);
+    }
+
+    setPresetParameter ("masterCompThreshold", 0.0f);
+    setPresetParameter ("masterCompAttack", 80.0f);
+    setPresetParameter ("masterCompRelease", 30.0f);
+    setPresetParameter ("masterTransientAttack", 0.0f);
+    setPresetParameter ("masterTransientRelease", 0.0f);
+    setPresetParameter ("masterTransientMix", 0.0f);
+    updateOpenModeButtons();
+    updateOpenLinkButton();
+    updateWideModeButtons();
+    updateOversamplingButtons();
+}
+
+void SuperBassAudioProcessorEditor::loadSelectedPreset()
+{
+    const auto index = presetBox.getSelectedId() - 1;
+    if (! juce::isPositiveAndBelow (index, static_cast<int> (presetEntries.size())))
+        return;
+
+    const auto& entry = presetEntries[static_cast<size_t> (index)];
+    if (entry.isHeader)
+        return;
+
+    if (entry.isFactory)
+        applyFactoryPreset (entry.factoryIndex);
+    else
+        loadPresetFile (entry.file);
+}
+
+void SuperBassAudioProcessorEditor::writePresetFile (const juce::File& file)
+{
+    if (auto xml = processor.apvts.copyState().createXml())
+    {
+        file.getParentDirectory().createDirectory();
+        xml->writeTo (file);
+    }
+}
+
+void SuperBassAudioProcessorEditor::loadPresetFile (const juce::File& file)
+{
+    if (auto xml = juce::XmlDocument::parse (file))
+        if (xml->hasTagName (processor.apvts.state.getType()))
+            processor.apvts.replaceState (juce::ValueTree::fromXml (*xml));
+
+    updateOpenModeButtons();
+    updateOpenLinkButton();
+    updateWideModeButtons();
+    updateOversamplingButtons();
+}
+
+void SuperBassAudioProcessorEditor::savePreset()
+{
+    const auto selectedIndex = presetBox.getSelectedId() - 1;
+    juce::String name = "User Preset";
+    if (juce::isPositiveAndBelow (selectedIndex, static_cast<int> (presetEntries.size())))
+    {
+        const auto& entry = presetEntries[static_cast<size_t> (selectedIndex)];
+        if (! entry.isFactory && ! entry.isHeader)
+            name = entry.file.getFileNameWithoutExtension();
+    }
+
+    auto file = getPresetDirectory().getChildFile (juce::File::createLegalFileName (name.trim()) + ".superbass");
+    if (file.existsAsFile())
+    {
+        int suffix = 2;
+        while (file.existsAsFile())
+            file = getPresetDirectory().getChildFile (juce::File::createLegalFileName (name.trim()) + " " + juce::String (suffix++) + ".superbass");
+    }
+
+    writePresetFile (file);
+    refreshPresetList();
+    for (int i = 0; i < static_cast<int> (presetEntries.size()); ++i)
+        if (! presetEntries[static_cast<size_t> (i)].isFactory && ! presetEntries[static_cast<size_t> (i)].isHeader && presetEntries[static_cast<size_t> (i)].file == file)
+            presetBox.setSelectedId (i + 1, juce::dontSendNotification);
+}
+
+void SuperBassAudioProcessorEditor::renamePreset()
+{
+    browsePresets();
+    refreshPresetList();
+}
+
+void SuperBassAudioProcessorEditor::browsePresets()
+{
+    getPresetDirectory().createDirectory();
+    getPresetDirectory().revealToUser();
+}
+
 void SuperBassAudioProcessorEditor::timerCallback()
 {
     updateOpenModeButtons();
+    updateOpenLinkButton();
     updateWideModeButtons();
+    updateOversamplingButtons();
     updateMeterButtons();
     vuMeter.repaint();
     routeStrip.repaint();
@@ -262,7 +624,14 @@ void SuperBassAudioProcessorEditor::paint (juce::Graphics& g)
 
     auto bounds = getLocalBounds().reduced (18);
     bounds.removeFromTop (54);
-    bounds.removeFromTop (74);
+    auto presetArea = bounds.removeFromTop (38).withTrimmedLeft (276).withTrimmedRight (12);
+    g.setColour (juce::Colour (23, 23, 24));
+    g.fillRoundedRectangle (presetArea.toFloat(), 7.0f);
+    g.setColour (panelOutline.withAlpha (0.85f));
+    g.drawRoundedRectangle (presetArea.toFloat().reduced (0.5f), 7.0f, 1.0f);
+    g.setColour (gold.withAlpha (0.16f));
+    g.fillRoundedRectangle (presetArea.removeFromLeft (5).toFloat(), 4.0f);
+    bounds.removeFromTop (36);
 
     auto smileArea = bounds.removeFromLeft (198);
     g.setColour (juce::Colour (25, 24, 23));
@@ -296,7 +665,18 @@ void SuperBassAudioProcessorEditor::resized()
     auto bounds = getLocalBounds().reduced (18);
     title.setBounds (bounds.removeFromTop (44));
 
-    auto content = bounds.removeFromTop (570);
+    auto presetArea = bounds.removeFromTop (38).withTrimmedLeft (276).withTrimmedRight (12).reduced (10, 5);
+    presetLabel.setBounds (presetArea.removeFromLeft (62));
+    presetArea.removeFromLeft (8);
+    presetBrowseButton.setBounds (presetArea.removeFromRight (74).reduced (3, 1));
+    presetRenameButton.setBounds (presetArea.removeFromRight (72).reduced (3, 1));
+    presetSaveButton.setBounds (presetArea.removeFromRight (76).reduced (3, 1));
+    presetLoadButton.setBounds (presetArea.removeFromRight (62).reduced (3, 1));
+    presetArea.removeFromRight (8);
+    presetBox.setBounds (presetArea.reduced (2, 1));
+    bounds.removeFromTop (36);
+
+    auto content = bounds.removeFromTop (630);
     auto smileArea = content.removeFromLeft (208).reduced (16);
     smileArea.removeFromTop (22);
     vuMeter.setBounds (smileArea.removeFromTop (132));
@@ -307,8 +687,15 @@ void SuperBassAudioProcessorEditor::resized()
     meterGrButton.setBounds (meterButtons.reduced (2));
     smileArea.removeFromTop (10);
     layoutKnob (smile, smileArea.removeFromTop (152));
-    smileArea.removeFromTop (4);
-    layoutKnob (outputGain, smileArea.removeFromTop (128));
+    auto osArea = smileArea.removeFromTop (54).reduced (0, 4);
+    oversamplingLabel.setBounds (osArea.removeFromTop (18));
+    const auto osButtonWidth = osArea.getWidth() / 4;
+    oversampling1xButton.setBounds (osArea.removeFromLeft (osButtonWidth).reduced (2));
+    oversampling2xButton.setBounds (osArea.removeFromLeft (osButtonWidth).reduced (2));
+    oversampling4xButton.setBounds (osArea.removeFromLeft (osButtonWidth).reduced (2));
+    oversampling8xButton.setBounds (osArea.reduced (2));
+    smileArea.removeFromTop (2);
+    layoutKnob (outputGain, smileArea.removeFromTop (126));
 
     routeStrip.setBounds (content.removeFromTop (70).reduced (12, 6));
 
@@ -320,12 +707,22 @@ void SuperBassAudioProcessorEditor::resized()
     openArea.removeFromTop (18);
     openPower.button.setBounds (openArea.removeFromTop (28));
     auto openKnobs = openArea.removeFromTop (174);
-    layoutKnob (sub, openKnobs.removeFromLeft (openKnobs.getWidth() / 2).reduced (5));
-    layoutKnob (subFreq, openKnobs.reduced (5));
+    const auto openKnobWidth = openKnobs.getWidth() / 2;
+    const auto subBounds = openKnobs.removeFromLeft (openKnobWidth).reduced (5);
+    const auto subFreqBounds = openKnobs.reduced (5);
+    layoutKnob (sub, subBounds);
+    layoutKnob (subFreq, subFreqBounds);
     auto bodyKnobs = openArea.removeFromTop (174);
-    layoutKnob (body, bodyKnobs.removeFromLeft (bodyKnobs.getWidth() / 2).reduced (5));
-    layoutKnob (bodyFreq, bodyKnobs.reduced (5));
-    auto openButtons = openArea.removeFromTop (50).reduced (2, 7);
+    const auto bodyKnobWidth = bodyKnobs.getWidth() / 2;
+    const auto bodyBounds = bodyKnobs.removeFromLeft (bodyKnobWidth).reduced (5);
+    const auto bodyFreqBounds = bodyKnobs.reduced (5);
+    layoutKnob (body, bodyBounds);
+    layoutKnob (bodyFreq, bodyFreqBounds);
+    const auto linkX = subBounds.getRight() - 15;
+    const auto linkY = subBounds.getBottom() + 8;
+    const auto linkW = juce::jmax (54, subFreqBounds.getX() - subBounds.getRight() + 30);
+    openFreqLinkButton.setBounds (linkX, linkY, linkW, 24);
+    auto openButtons = openArea.removeFromTop (66).reduced (2, 8);
     const auto openButtonWidth = openButtons.getWidth() / 3;
     punchButton.setBounds (openButtons.removeFromLeft (openButtonWidth).reduced (3));
     bassHeadButton.setBounds (openButtons.removeFromLeft (openButtonWidth).reduced (3));
@@ -368,7 +765,8 @@ void SuperBassAudioProcessorEditor::resized()
     layoutKnob (transientRelease, transArea.removeFromLeft (transWidth).reduced (3));
     layoutKnob (transientMix, transArea.reduced (3));
 
-    auto eqArea = masterArea.removeFromTop (122);
+    masterArea.removeFromTop (8);
+    auto eqArea = masterArea.removeFromTop (146);
     const int eqWidth = eqArea.getWidth() / 5;
     layoutKnob (eqLow, eqArea.removeFromLeft (eqWidth).reduced (2));
     layoutKnob (eqLowMid, eqArea.removeFromLeft (eqWidth).reduced (2));
@@ -416,8 +814,8 @@ void SuperBassAudioProcessorEditor::VuMeter::paint (juce::Graphics& g)
     const auto rawDb = mode == 0 ? processor.getInputMeterDb()
                      : mode == 1 ? processor.getOutputMeterDb()
                                  : processor.getGainReductionMeterDb();
-    const auto attack = 0.55f;
-    const auto release = mode == 2 ? 0.096f : 0.076f;
+    const auto attack = 0.64f;
+    const auto release = mode == 2 ? 0.125f : 0.098f;
     displayDb += (rawDb - displayDb) * (rawDb > displayDb ? attack : release);
 
     auto meter = getLocalBounds().reduced (10, 8);
@@ -446,29 +844,33 @@ void SuperBassAudioProcessorEditor::VuMeter::paint (juce::Graphics& g)
     arc.addCentredArc (centre.x, centre.y, radius, radius, 0.0f, startAngle, endAngle, true);
     g.strokePath (arc, juce::PathStrokeType (1.3f));
 
-    const std::array<float, 7> tickValues = mode == 2
-        ? std::array<float, 7> { 0.0f, 0.05f, 0.15f, 0.3f, 0.5f, 0.75f, 1.0f }
-        : std::array<float, 7> { 0.0f, 0.19f, 0.38f, 0.58f, 0.77f, 0.88f, 1.0f };
+    const std::array<float, 9> tickValues = mode == 2
+        ? std::array<float, 9> { 0.0f, 0.06f, 0.14f, 0.25f, 0.39f, 0.55f, 0.72f, 0.86f, 1.0f }
+        : std::array<float, 9> { 0.0f, 0.16f, 0.32f, 0.48f, 0.64f, 0.77f, 0.86f, 0.93f, 1.0f };
 
     for (auto tick : tickValues)
     {
         const auto angle = startAngle + (endAngle - startAngle) * tick;
-        const auto important = tick >= 0.77f || tick <= 0.001f;
+        const auto important = tick >= 0.77f || tick <= 0.001f || (tick > 0.45f && tick < 0.5f);
         const auto inner = centre + juce::Point<float> (std::cos (angle), std::sin (angle)) * (radius - (important ? 11.0f : 8.0f));
         const auto outer = centre + juce::Point<float> (std::cos (angle), std::sin (angle)) * (radius - 1.5f);
         g.setColour ((important ? ink : ink.withAlpha (0.62f)));
         g.drawLine (inner.x, inner.y, outer.x, outer.y, important ? 1.8f : 1.1f);
     }
 
-    g.setFont (juce::FontOptions (9.4f, juce::Font::bold));
+    g.setFont (juce::FontOptions (10.8f, juce::Font::bold));
     g.setColour (ink.withAlpha (0.78f));
-    g.drawText (mode == 2 ? "-20" : "-20", getLocalBounds().reduced (17, 18), juce::Justification::bottomLeft);
-    g.drawText (mode == 2 ? "0" : "+6", getLocalBounds().reduced (17, 18), juce::Justification::bottomRight);
+    const auto numberArea = getLocalBounds().reduced (15, 13).removeFromBottom (28);
+    g.drawText (mode == 2 ? "-20" : "-20", numberArea, juce::Justification::bottomLeft);
+    g.drawText (mode == 2 ? "0" : "+6", numberArea, juce::Justification::bottomRight);
+    if (mode != 2)
+        g.drawText ("-10", numberArea.withTrimmedLeft (45).withTrimmedRight (80),
+                    juce::Justification::bottomLeft);
 
     if (mode != 2)
     {
-        const auto markY = getLocalBounds().getY() + 39;
-        g.setFont (juce::FontOptions (10.8f, juce::Font::bold));
+        const auto markY = getLocalBounds().getY() + 52;
+        g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
         g.setColour (juce::Colour (132, 35, 24).withAlpha (0.9f));
         g.drawText ("0", getLocalBounds().withTrimmedLeft (98).withTrimmedRight (47).withY (markY).withHeight (14),
                     juce::Justification::centred);
