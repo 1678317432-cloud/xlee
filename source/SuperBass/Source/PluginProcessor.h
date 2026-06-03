@@ -150,6 +150,7 @@ private:
 
     static float softSaturate (float x, float drive);
     static float thickSaturate (float x, float drive, float tone);
+    static float premiumSaturate (float x, float drive, float warmth);
     static float softClip (float x, float threshold, float softness);
 
     juce::AudioBuffer<float> dryBuffer;

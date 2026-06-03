@@ -9,7 +9,7 @@ class SuperBassAudioProcessorEditor final : public juce::AudioProcessorEditor,
 {
 public:
     explicit SuperBassAudioProcessorEditor (SuperBassAudioProcessor&);
-    ~SuperBassAudioProcessorEditor() override = default;
+    ~SuperBassAudioProcessorEditor() override;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -81,6 +81,21 @@ private:
         juce::File file;
     };
 
+    class TechLookAndFeel final : public juce::LookAndFeel_V4
+    {
+    public:
+        void drawRotarySlider (juce::Graphics&, int x, int y, int width, int height,
+                               float sliderPos, float rotaryStartAngle, float rotaryEndAngle,
+                               juce::Slider&) override;
+        void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour& backgroundColour,
+                                   bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override;
+        void drawToggleButton (juce::Graphics&, juce::ToggleButton&, bool shouldDrawButtonAsHighlighted,
+                               bool shouldDrawButtonAsDown) override;
+        void drawComboBox (juce::Graphics&, int width, int height, bool isButtonDown,
+                           int buttonX, int buttonY, int buttonW, int buttonH,
+                           juce::ComboBox&) override;
+    };
+
     class VuMeter final : public juce::Component
     {
     public:
@@ -116,6 +131,7 @@ private:
     };
 
     SuperBassAudioProcessor& processor;
+    TechLookAndFeel techLookAndFeel;
     RouteStrip routeStrip;
 
     Knob smile;
@@ -178,6 +194,7 @@ private:
     std::vector<PresetEntry> presetEntries;
     bool suppressPresetChange = false;
     bool suppressOpenLinkSync = false;
+    float visualMotionPhase = 0.0f;
     int meterMode = 1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SuperBassAudioProcessorEditor)
