@@ -12,7 +12,7 @@ fi
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_OSX_ARCHITECTURES=arm64
 
-"$CMAKE" --build "$ROOT_DIR/build/SuperBass" --config Release --parallel 4
+"$CMAKE" --build "$ROOT_DIR/build/SuperBass" --config Release --parallel 1
 
 xattr -cr "$HOME/Library/Audio/Plug-Ins/Components/Super Bass.component"
 codesign --force --deep --sign - "$HOME/Library/Audio/Plug-Ins/Components/Super Bass.component"

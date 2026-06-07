@@ -41,6 +41,8 @@ public:
     float getInputMeterDb() const noexcept { return inputMeterDb.load(); }
     float getOutputMeterDb() const noexcept { return outputMeterDb.load(); }
     float getGainReductionMeterDb() const noexcept { return gainReductionMeterDb.load(); }
+    void setCurrentPresetName (const juce::String& name);
+    juce::String getCurrentPresetName() const;
 
 private:
     enum class ModuleId
@@ -68,6 +70,8 @@ private:
     {
         void prepare (double newSampleRate);
         void reset();
+        void setLowPass (float freqHz, float q);
+        void setHighPass (float freqHz, float q);
         void setPeak (float freqHz, float q, float gainDb);
         void setLowShelf (float freqHz, float q, float gainDb);
         void setHighShelf (float freqHz, float q, float gainDb);
@@ -209,6 +213,14 @@ private:
     std::array<Biquad, 2> eqMid;
     std::array<Biquad, 2> eqHighMid;
     std::array<Biquad, 2> eqHigh;
+    std::array<Biquad, 2> openLinkSubLowA;
+    std::array<Biquad, 2> openLinkSubLowB;
+    std::array<Biquad, 2> openLinkBodyHighA;
+    std::array<Biquad, 2> openLinkBodyHighB;
+    std::array<Biquad, 2> openCenterLinkSubLowA;
+    std::array<Biquad, 2> openCenterLinkSubLowB;
+    std::array<Biquad, 2> openCenterLinkBodyHighA;
+    std::array<Biquad, 2> openCenterLinkBodyHighB;
 
     SmoothValue smileSmooth;
     SmoothValue routingWetSmooth;
@@ -255,10 +267,22 @@ private:
     std::array<float, 2> openSubControlEnv {};
     std::array<float, 2> openBodyControlEnv {};
     std::array<float, 2> openMidControlEnv {};
+    std::array<float, 2> openLinkSubEnv {};
+    std::array<float, 2> openPunchFastEnv {};
+    std::array<float, 2> openPunchSlowEnv {};
+    std::array<float, 2> openBassHeadVcaEnv {};
+    std::array<float, 2> openBassHeadRmsEnv {};
+    std::array<float, 2> openBoomSubDuckEnv {};
     float openCenterStabilityEnv = 0.0f;
     float openCenterSubControlEnv = 0.0f;
     float openCenterBodyControlEnv = 0.0f;
     float openCenterMidControlEnv = 0.0f;
+    float openCenterLinkSubEnv = 0.0f;
+    float openCenterPunchFastEnv = 0.0f;
+    float openCenterPunchSlowEnv = 0.0f;
+    float openCenterBassHeadVcaEnv = 0.0f;
+    float openCenterBassHeadRmsEnv = 0.0f;
+    float openCenterBoomSubDuckEnv = 0.0f;
     std::atomic<float> inputMeterDb { -60.0f };
     std::atomic<float> outputMeterDb { -60.0f };
     std::atomic<float> gainReductionMeterDb { 0.0f };
@@ -270,11 +294,13 @@ private:
     int activeOversamplingIndex = 0;
     int oversamplingLatencySamples = 0;
     int dryLatencyWritePosition = 0;
+    int dryLatencyPrimingSamplesRemaining = 0;
     int oversamplingFadeSamplesTotal = 1;
     int oversamplingFadeSamplesRemaining = 0;
     int startupRampSamplesTotal = 1;
     int startupRampSamplesRemaining = 0;
     int silentBlockCount = 0;
+    juce::String currentPresetName { "Default" };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SuperBassAudioProcessor)
 };

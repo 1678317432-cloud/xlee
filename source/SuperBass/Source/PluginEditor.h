@@ -13,6 +13,7 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    void mouseUp (const juce::MouseEvent&) override;
 
 private:
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
@@ -43,6 +44,7 @@ private:
     void setupToggle (Toggle& toggle, const juce::String& label, const juce::String& paramId);
     void setupChoice (Choice& choice, const juce::String& label, const juce::String& paramId);
     void layoutKnob (Knob& knob, juce::Rectangle<int> bounds);
+    void layoutKnob (Knob& knob, juce::Rectangle<int> bounds, int maxSliderSize);
     void layoutChoice (Choice& choice, juce::Rectangle<int> bounds);
     void setupModeButton (juce::TextButton& button, const juce::String& text, int mode);
     void setupOpenModeButton (juce::TextButton& button, const juce::String& text, int mode);
@@ -70,7 +72,20 @@ private:
     void writePresetFile (const juce::File& file);
     void loadPresetFile (const juce::File& file);
     juce::File getPresetDirectory() const;
+    void syncPresetBoxToProcessorState();
     void timerCallback() override;
+    void setActiveScreen (int screenIndex);
+    void updateScreenVisibility();
+    void updateDynamicUiColours();
+    float getSmileNormalised() const;
+    std::array<int, 3> getRoutingOrderForUi() const;
+    void showScaleContextMenu();
+    void applyScalePreset (float scale);
+    void updateScaledFonts();
+    void renderThemeLayer (juce::Graphics&, juce::Rectangle<int> canvas, float smileAmount, float loopPhase);
+    void drawSmileWaveOrbit (juce::Graphics&, juce::Point<float> centre, juce::Colour accent,
+                             juce::Colour textColour, float smileAmount);
+    void invalidateThemeCache();
 
     struct PresetEntry
     {
@@ -84,16 +99,25 @@ private:
     class TechLookAndFeel final : public juce::LookAndFeel_V4
     {
     public:
+        void setUiScale (float newScale) noexcept;
         void drawRotarySlider (juce::Graphics&, int x, int y, int width, int height,
                                float sliderPos, float rotaryStartAngle, float rotaryEndAngle,
                                juce::Slider&) override;
+        juce::Font getTextButtonFont (juce::TextButton&, int buttonHeight) override;
+        juce::Font getComboBoxFont (juce::ComboBox&) override;
+        juce::Font getPopupMenuFont() override;
         void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour& backgroundColour,
                                    bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override;
+        void drawButtonText (juce::Graphics&, juce::TextButton&, bool shouldDrawButtonAsHighlighted,
+                             bool shouldDrawButtonAsDown) override;
         void drawToggleButton (juce::Graphics&, juce::ToggleButton&, bool shouldDrawButtonAsHighlighted,
                                bool shouldDrawButtonAsDown) override;
         void drawComboBox (juce::Graphics&, int width, int height, bool isButtonDown,
                            int buttonX, int buttonY, int buttonW, int buttonH,
                            juce::ComboBox&) override;
+
+    private:
+        float uiScale = 1.0f;
     };
 
     class VuMeter final : public juce::Component
@@ -107,6 +131,19 @@ private:
         SuperBassAudioProcessor& processor;
         int mode = 1;
         float displayDb = -60.0f;
+    };
+
+    class MeterStrip final : public juce::Component
+    {
+    public:
+        explicit MeterStrip (SuperBassAudioProcessor&);
+        void paint (juce::Graphics&) override;
+
+    private:
+        SuperBassAudioProcessor& processor;
+        float displayInDb = -60.0f;
+        float displayOutDb = -60.0f;
+        float displayGrDb = -60.0f;
     };
 
     class RouteStrip final : public juce::Component
@@ -187,7 +224,10 @@ private:
     juce::TextButton presetSaveButton;
     juce::TextButton presetRenameButton;
     juce::TextButton presetBrowseButton;
+    juce::TextButton nextViewButton;
+    juce::TextButton backViewButton;
 
+    MeterStrip meterStrip;
     VuMeter vuMeter;
 
     juce::Label title;
@@ -195,7 +235,25 @@ private:
     bool suppressPresetChange = false;
     bool suppressOpenLinkSync = false;
     float visualMotionPhase = 0.0f;
+    float smoothedSmileAmount = 1.0f;
+    float themeSmileAmount = 1.0f;
+    float lastRenderedThemeSmileAmount = -1.0f;
+    float smileOrbitFastEnv = 0.0f;
+    float smileOrbitGlowEnv = 0.0f;
+    float smileOrbitEnv = 0.0f;
+    float smileLiquidEnv = 0.0f;
+    float smileRippleEnv = 0.0f;
+    juce::Image themeCache;
+    int themeCacheWidth = 0;
+    int themeCacheHeight = 0;
+    int themeCacheScreen = -1;
+    float lastRenderedThemePhase = -1.0f;
+    float uiScale = 1.0f;
     int meterMode = 1;
+    int activeScreen = 0;
+    int lastLayoutRoutingChoice = -1;
+    float lastAdvancedRepaintSmile = -1.0f;
+    int lastAdvancedRepaintRoutingChoice = -1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SuperBassAudioProcessorEditor)
 };
