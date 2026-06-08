@@ -8,7 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../../external/JUCE JUCE)
 
 juce_add_plugin(SuperBass
-    COMPANY_NAME "Xlee Audio"
+    COMPANY_NAME "Super Audio"
     BUNDLE_ID "com.xleeaudio.superbass"
     PLUGIN_MANUFACTURER_CODE Xlee
     PLUGIN_CODE SuBs

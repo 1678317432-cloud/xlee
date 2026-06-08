@@ -1260,7 +1260,7 @@ void SuperBassAudioProcessorEditor::setupPresetControls()
 juce::File SuperBassAudioProcessorEditor::getPresetDirectory() const
 {
     return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
-        .getChildFile ("Xlee Audio")
+        .getChildFile ("Super Audio")
         .getChildFile ("Super Bass")
         .getChildFile ("Presets");
 }
